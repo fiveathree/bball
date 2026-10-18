@@ -67,16 +67,20 @@
   .demo svg .dot { display: none; fill: var(--accent); stroke: var(--card); stroke-width: .6; }
   .demo svg.dots .dot { display: inline; }
   .demo svg .court { stroke: var(--line); stroke-width: 2; fill: none; }
-  .demo svg .rim { stroke: var(--accent); stroke-width: 3; }
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
   .demo-phase b { margin-right: 6px; }
-  .demo-phases button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
   .compare { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; align-items: center; }
-  .compare.solo { grid-template-columns: 1fr; }
-  .compare.solo #cmp-demo { display: none; }
   #cmp-demo svg { margin: 0; max-height: 60vh; }
   .seg { gap: 4px; flex-wrap: nowrap; }
-  .seg button { flex: 1; padding: 4px 2px; min-height: 32px; font-size: 12px; white-space: nowrap; }
+  .seg button { padding: 4px 8px; min-height: 32px; font-size: 12px; white-space: nowrap; }
+  .seg .meta { font-size: 12px; }
+  .step { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .step:first-child { border-top: 0; }
+  .step-pic { flex: none; width: 76px; }
+  .step-pic svg { width: 100%; height: 118px; margin: 0; }
+  .step-title { padding: 0; color: var(--text); font-weight: 600; }
+  .step table.metrics { margin: 4px 0; font-size: 13px; }
+  .step .hint { margin-top: 4px; }
   #cmp-demo .demo-phase { font-size: 13px; min-height: 0; }
   #cmp-demo .demo-phase span { display: block; color: var(--muted); font-size: 12px; }
   .stage { position: relative; }
@@ -85,7 +89,6 @@
   table.metrics th, table.metrics td { padding: 6px 4px; border-top: 1px solid var(--line); text-align: right; }
   table.metrics th:first-child, table.metrics td:first-child { text-align: left; font-weight: normal; color: var(--muted); }
   #ana-chart { display: block; width: 100%; height: 110px; cursor: pointer; }
-  details > summary { cursor: pointer; font-weight: 600; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -117,8 +120,8 @@
         <canvas id="overlay"></canvas>
       </div>
       <div class="demo" id="cmp-demo">
-        <div class="row seg" id="right-mode"><button data-mode="mimic">你的動作</button><button data-mode="demo">標準示範</button></div>
-        <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
+        <div class="row seg"><span class="meta grow">火柴人複製你的動作</span><button id="demo-dots">關節點</button></div>
+        <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="火柴人複製影片中的動作"></svg>
         <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
       </div>
     </div>
@@ -128,11 +131,17 @@
     </div>
 
     <div class="row" style="margin-top:10px">
-      <button id="prev" aria-label="上一格">◀ 上一格</button>
+      <button id="first" aria-label="回到第一格" title="回到第一格">⏮</button>
+      <button id="prev" aria-label="上一格" title="上一格">◀</button>
       <button class="primary grow" id="play">播放</button>
-      <button id="next" aria-label="下一格">下一格 ▶</button>
+      <button id="next" aria-label="下一格" title="下一格">▶</button>
     </div>
     <div class="row" style="margin-top:8px" id="speeds"></div>
+
+    <div class="card" style="margin-top:16px">
+      <b>動作拆解</b>
+      <div id="breakdown"></div>
+    </div>
 
     <div class="card" id="ana" style="margin-top:16px">
       <div class="row"><b class="grow">骨架分析</b><button class="link danger" id="ana-clear" hidden>清除分析</button></div>
@@ -147,21 +156,6 @@
         <p class="hint">角度由單一鏡頭以 3D 估算，只供參考；看不清楚的關節不顯示數值。</p>
       </div>
     </div>
-
-    <details class="card" id="lab-demo" style="margin-top:16px">
-      <summary>示範動作控制</summary>
-      <p class="hint" id="sync-hint"></p>
-      <div class="demo" id="demo-ctrl">
-        <input type="range" id="demo-seek" min="0" max="0" step="0.01" value="0" aria-label="示範時間軸">
-        <div class="row">
-          <button class="primary" id="demo-play">播放示範</button>
-          <span class="row" id="demo-speeds"></span>
-          <button id="demo-dots">關節點</button>
-        </div>
-        <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
-        <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
-      </div>
-    </details>
 
     <h2>時間點筆記</h2>
     <div class="card">
@@ -278,10 +272,10 @@ async function importVideo(f, action) {
 }
 
 // 示範片（首頁預設）：側面拍攝的真人跳投，與火柴人同一角度；Pexels 授權，來源見 samples/README.md。
-// 分析結果已預先計好（samples/jumpshot-side.json，只分析頭 4 秒），打開即可同步，不用等。
+// 全片分析結果已預先計好（samples/jumpshot-side.json），打開即可同步，不用等。
 const SAMPLE = {
   id: 'sample', sample: true, file: 'samples/jumpshot-side.mp4', analysis: 'samples/jumpshot-side.json',
-  name: '示範片：側面跳投', action: '投籃', duration: 21.553333, analyzeTo: 4, marks: [],
+  name: '示範片：側面跳投', action: '投籃', duration: 21.553333, marks: [],
   credit: '影片來源：PNW Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/'
 };
 let sampleData = null;
@@ -350,8 +344,6 @@ async function openLab(clip) {
   $('action').value = clip.action;
   $('note').value = '';
   renderMarks();
-  loadDemo(clip.action);
-  rightMode = 'mimic';   // 有分析就預設顯示「你的動作」
   showAnalysis(clip.sample ? await sampleAnalysis() : await getAnalysis(clip.id));
   renderList();
 }
@@ -375,6 +367,7 @@ video.addEventListener('pause', () => $('play').textContent = '播放');
 video.addEventListener('ended', () => $('play').textContent = '重播');
 $('seek').oninput = e => { video.pause(); video.currentTime = +e.target.value; };
 $('play').onclick = () => video.paused ? video.play() : video.pause();
+$('first').onclick = () => { video.pause(); video.currentTime = 0; };
 $('prev').onclick = () => step(-1);
 $('next').onclick = () => step(1);
 $('del').onclick = async () => {
@@ -412,168 +405,9 @@ function renderMarks() {
   $('marks-empty').hidden = current.marks.length > 0;
 }
 
-// ---- 動作示範：火柴人示意動畫 ----
-// 每個動作只寫關鍵姿勢，中間自動補間；所有動作共用同一副骨架。
-// 角度（度）：0 = 垂直向下，正數 = 向前（正面視角時為畫面右方）。
-// arms = [前上臂, 前前臂, 後上臂, 後前臂]；legs = [前大腿, 前小腿, 後大腿, 後小腿]。
-// 「前」指靠近鏡頭、深色那一邊（右手持球）；air = 離地高度。
-// hand = [前手腕, 後手腕] 相對前臂的屈曲：正數 = 手腕向後翻（托球），負數 = 向前下壓（出手）。
-// 腰、頸、腳掌的角度由軀幹前傾及離地高度自動推算，不用逐格寫。
-const BODY = {
-  trunk: 38, neck: 5, skull: 8, upper: 19, fore: 18, palm: 4, finger: 4, thumb: 3.5,
-  thigh: 27, shin: 26, ankle: 4, heel: 3, sole: 7, toe: 3
-};
+// ---- 右邊火柴人：畫法 ----
+// 火柴人由分析得到的關節逐格驅動（見下方「右邊火柴人複製真人動作」），這裡只負責畫。
 const GROUND = 185, BALL_R = 6;
-const P = (x, t, arms, legs, air = 0, hand = [0, 0]) => ({ x, t, arms, legs, air, hand });
-const RUN_A = [30, 0, -25, -50], RUN_B = [-25, -50, 30, 0];
-const SET = [160, 150, 135, 165], FOLLOW = [160, 140, 120, 150], LAND = [25, -10, 20, -15];
-
-// keys：{ t 秒, label 階段, cue 要點, pose }；沒有 pose 即維持上一個姿勢。
-// ball：[t, 位置]；'wN' = 前手持球，[x, y] 可用數字、關節名稱（取其座標）或 'floor'。
-const DEMOS = {
-  投籃: { hoop: true, keys: [
-    { t: 0, label: '準備', cue: '雙腳與肩同寬，膝蓋微曲，球放在胸前，眼望籃框。', pose: P(70, 10, [40, 120, 30, 110], [25, -10, 15, -20]) },
-    { t: 0.5, label: '下蹲蓄力', cue: '屈膝降低重心，把球帶到下巴前方，手肘對準籃框。', pose: P(70, 15, [60, 150, 50, 140], [45, -20, 35, -30], 0, [30, 0]) },
-    { t: 0.85, label: '起跳舉球', cue: '雙腳蹬地向上，把球舉到額頭前上方的出手點。', pose: P(70, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8, [70, 20]) },
-    { t: 1.05, label: '出手', cue: '接近最高點時伸直手臂、手腕下壓，球從食指與中指離手。', pose: P(70, 3, SET, [2, -2, -2, -8], 14, [-20, 0]) },
-    { t: 1.4, label: '落地與隨球', cue: '手臂保持伸直、手腕下垂，在起跳位置附近平穩落地。', pose: P(72, 5, FOLLOW, LAND, 0, [-100, -50]) },
-    { t: 2.4 }
-  ], ball: [[0, 'wN'], [1.05, 'wN'], [1.25, [122, 18]], [1.4, [150, 8]], [1.55, [178, 14]], [1.75, [211, 40]], [1.95, [212, 80]], [2.2, [208, 'floor']]] },
-
-  運球: { keys: [
-    { t: 0, label: '準備姿勢', cue: '屈膝降低重心，上身微向前，抬頭觀察場上。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
-    { t: 0.2, label: '下壓推球', cue: '用手指和指腹把球向下推，不要用手掌拍球。', pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25], 0, [-40, 0]) },
-    { t: 0.32, label: '球觸地反彈', cue: '保持低重心，眼睛不看球。' },
-    { t: 0.45, label: '迎球收回', cue: '球反彈時手掌在上方迎球、順勢緩衝，球不高於腰部。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
-    { t: 0.65, pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25], 0, [-40, 0]) },
-    { t: 0.77 },
-    { t: 0.9, pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
-    { t: 1.3 }
-  ], ball: [[0, 'wN'], [0.2, 'wN'], [0.32, ['wN', 'floor']], [0.45, 'wN'], [0.65, 'wN'], [0.77, ['wN', 'floor']], [0.9, 'wN']] },
-
-  上籃: { hoop: true, keys: [
-    { t: 0, label: '運球推進', cue: '用慣用手在身體前側運球，加速接近籃框。', pose: P(50, 15, [20, 40, -20, 30], RUN_A) },
-    { t: 0.3, pose: P(80, 15, [30, 70, 20, -10], RUN_B) },
-    { t: 0.6, label: '收球・第一步', cue: '右腳踏出的同時雙手收球，把球護在胸前。', pose: P(110, 15, [40, 110, 40, 100], [30, 10, -20, -40]) },
-    { t: 0.85, label: '第二步起跳', cue: '左腳踏地起跳，右膝向上提，把身體帶向籃框。', pose: P(140, 8, [100, 150, 80, 140], [80, 0, 15, 5], 0, [30, 0]) },
-    { t: 1.1, label: '舉球上籃', cue: '在最高點伸直右手，用手腕輕托把球放到籃板方框。', pose: P(168, 8, [165, 170, 120, 150], [85, 10, 5, -10], 25, [-30, 0]) },
-    { t: 1.45, label: '落地', cue: '雙腳落地、屈膝緩衝，保持平衡。', pose: P(182, 5, [60, 80, 50, 70], [25, -5, 20, -15]) },
-    { t: 2.0 }
-  ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.25, [215, 28]], [1.4, [213, 52]], [1.6, [212, 110]], [1.8, [210, 'floor']]] },
-
-  急停跳投: { hoop: true, keys: [
-    { t: 0, label: '運球推進', cue: '抬頭運球推進，留意與防守者的距離。', pose: P(40, 15, [20, 40, -20, 30], RUN_A) },
-    { t: 0.3, pose: P(68, 15, [30, 70, 20, -10], RUN_B) },
-    { t: 0.55, label: '急停制動', cue: '一二步急停，前腳煞停、屈膝降低重心，上身不要繼續前衝。', pose: P(92, 5, [40, 110, 30, 110], [35, 10, -15, -35]) },
-    { t: 0.8, label: '收球蓄力', cue: '雙腳站穩對準籃框，把球帶到出手點下方。', pose: P(96, 10, [60, 150, 50, 140], [40, -15, 30, -25], 0, [30, 0]) },
-    { t: 0.97, pose: P(96, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8, [70, 20]) },
-    { t: 1.1, label: '起跳出手', cue: '垂直向上起跳，在最高點伸直手臂出手。', pose: P(96, 3, SET, [2, -2, -2, -8], 14, [-20, 0]) },
-    { t: 1.45, label: '落地與隨球', cue: '在起跳位置附近落地，身體不要向前飄。', pose: P(98, 5, FOLLOW, LAND, 0, [-100, -50]) },
-    { t: 2.5 }
-  ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.3, [142, 15]], [1.45, [168, 6]], [1.6, [192, 14]], [1.8, [211, 40]], [2.0, [212, 80]], [2.3, [208, 'floor']]] },
-
-  傳球: { keys: [
-    { t: 0, label: '持球於胸前', cue: '雙手持球在胸前，手肘自然向下，眼望傳球目標。', pose: P(80, 8, [30, 120, 25, 115], [15, -5, 10, -10], 0, [20, 20]) },
-    { t: 0.4, label: '跨步', cue: '向傳球方向跨出一步，把力量由腳傳到手。', pose: P(88, 12, [20, 130, 18, 128], [35, 10, -15, -30], 0, [30, 30]) },
-    { t: 0.65, label: '雙手推出', cue: '雙臂向前伸直，手腕外翻，拇指朝下。', pose: P(90, 12, [85, 90, 82, 88], [35, 10, -15, -30], 0, [-30, -30]) },
-    { t: 1.0, label: '隨球動作', cue: '手臂保持伸直指向目標，球應該直線飛向隊友胸口。', pose: P(90, 12, [82, 85, 80, 84], [35, 10, -15, -30], 0, [-50, -50]) },
-    { t: 1.8 }
-  ], ball: [[0, 'wN'], [0.65, 'wN'], [0.95, [180, 'wN']], [1.2, [262, 'wN']]] },
-
-  防守: { front: true, keys: [
-    { t: 0, label: '防守姿勢', cue: '雙腳比肩寬，屈膝、臀部向後坐，雙手張開。', pose: P(90, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
-    { t: 0.3, label: '領先腳跨出', cue: '移動方向那隻腳先橫向跨出，重心保持低而平。', pose: P(105, 0, [70, 120, -60, -30], [52, 12, -30, 2]) },
-    { t: 0.55, label: '後腳跟上', cue: '後腳推地跟上，雙腳不交叉、不併攏。', pose: P(120, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
-    { t: 0.85, pose: P(135, 0, [70, 120, -60, -30], [52, 12, -30, 2]) },
-    { t: 1.1, pose: P(150, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
-    { t: 1.4, label: '換方向', cue: '換方向時先降低重心，再由另一隻腳領先跨出。', pose: P(150, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
-    { t: 1.7, pose: P(135, 0, [60, 30, -70, -120], [30, -2, -52, -12]) },
-    { t: 1.95, pose: P(120, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
-    { t: 2.25, pose: P(105, 0, [60, 30, -70, -120], [30, -2, -52, -12]) },
-    { t: 2.5, pose: P(90, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
-    { t: 2.9 }
-  ], ball: [] }
-};
-for (const d of Object.values(DEMOS)) {
-  d.keys.forEach((k, i) => { k.pose ??= d.keys[i - 1].pose; });
-  d.ball = d.ball.map(([t, at]) => ({ t, at }));
-  d.end = d.keys.at(-1).t;
-  // 每個姿勢數值一欄，方便逐欄做平滑插值
-  const vecs = d.keys.map(({ pose: p }) => [p.x, p.t, p.air, ...p.arms, ...p.legs, ...p.hand]);
-  d.cols = vecs[0].map((_, c) => vecs.map(v => v[c]));
-}
-const fromVec = v => P(v[0], v[1], v.slice(3, 7), v.slice(7, 11), v[2], v.slice(11, 13));
-
-// 由角度計出各關節座標（正向運動學），再把最低的腳放回地面。
-// 共 31 個點，排法對應 MediaPipe Pose 的 33 點，日後可把用戶骨架直接疊在示範上比較。
-// look = 視線目標（例如籃框），只用於側面視角。
-const go = (p, deg, len) => { const r = deg * Math.PI / 180; return [p[0] + Math.sin(r) * len, p[1] + Math.cos(r) * len]; };
-const clamp01 = v => Math.min(Math.max(v, 0), 1);
-function solve(pose, front, look) {
-  const sw = front ? 10 : 0, hw = front ? 7 : 0, t = pose.t;
-  const [uN, fN, uF, fF] = pose.arms, [tN, sN, tF, sF] = pose.legs, [xN, xF] = pose.hand;
-  const j = { p: [0, 0], hN: [hw, 0], hF: [-hw, 0] };
-  // 脊椎三節：愈上愈前傾，背部呈弧線；頸和頭較直，保持抬頭
-  j.m = go(j.p, 180 - t * 0.4, BODY.trunk / 3);
-  j.c = go(j.m, 180 - t * 1.0, BODY.trunk / 3);
-  j.n = go(j.c, 180 - t * 1.6, BODY.trunk / 3);
-  j.nk = go(j.n, 180 - t * 0.8, BODY.neck);
-  j.h = go(j.nk, 180 - t * 0.3, BODY.skull);
-  j.sN = [j.n[0] + sw, j.n[1]]; j.sF = [j.n[0] - sw, j.n[1]];
-  j.eN = go(j.sN, uN, BODY.upper); j.wN = go(j.eN, fN, BODY.fore);
-  j.eF = go(j.sF, uF, BODY.upper); j.wF = go(j.eF, fF, BODY.fore);
-  j.bN = go(j.wN, fN, BALL_R + 1); j.bF = go(j.wF, fF, BALL_R + 1);
-  // 手：手掌（g）→ 微曲的手指（q），另加拇指（u）
-  const hand = (w, a) => { const g = go(w, a, BODY.palm); return [g, go(g, a + 20, BODY.finger), go(w, a - 40, BODY.thumb)]; };
-  [j.gN, j.qN, j.uN] = hand(j.wN, fN + xN);
-  [j.gF, j.qF, j.uF] = hand(j.wF, fF + xF);
-  j.kN = go(j.hN, tN, BODY.thigh); j.aN = go(j.kN, sN, BODY.shin);
-  j.kF = go(j.hF, tF, BODY.thigh); j.aF = go(j.kF, sF, BODY.shin);
-  const dy = GROUND - pose.air - BODY.ankle - Math.max(j.aN[1], j.aF[1]);
-  for (const k in j) j[k] = [j[k][0] + pose.x, j[k][1] + dy];
-  // 腳：腳跟（l）、前腳掌（o）、腳趾（t）。貼地時平放，離地愈高腳尖愈向下；前腳掌著地時腳趾保持平貼
-  const foot = (a, side) => {
-    const base = [a[0], a[1] + BODY.ankle];
-    if (front) return [base, [a[0] + side * 5, base[1]], [a[0] + side * 7, base[1]]];
-    const f = 90 - 55 * clamp01((GROUND - base[1]) / 14), under = go(a, f - 90, BODY.ankle), ball = go(under, f, BODY.sole);
-    return [go(under, f + 180, BODY.heel), ball, go(ball, ball[1] > GROUND - 1.5 ? 90 : f, BODY.toe)];
-  };
-  [j.lN, j.oN, j.tN] = foot(j.aN, 1);
-  [j.lF, j.oF, j.tF] = foot(j.aF, -1);
-  // 鼻尖顯示頭部朝向：有籃框時望向籃框，否則望向前方
-  if (!front) {
-    const ang = look ? Math.min(150, Math.max(60, Math.atan2(look[0] - j.h[0], look[1] - j.h[1]) * 180 / Math.PI)) : 95;
-    j.ns = go(j.h, ang, 8); j.nose = go(j.h, ang, 11);
-  }
-  return j;
-}
-
-function ballAt(at, j) {
-  if (typeof at === 'string') return j['b' + at.slice(1)];
-  const [x, y] = at;
-  return [typeof x === 'string' ? j[x][0] : x,
-    y === 'floor' ? GROUND - BALL_R : typeof y === 'string' ? j[y][1] : y];
-}
-
-// 單調三次插值：曲線經過每個關鍵姿勢，速度連續（不會每到一格就停頓），亦不會衝過頭
-function tangent(T, V, i) {
-  if (i <= 0 || i >= V.length - 1) return 0;
-  const d0 = (V[i] - V[i - 1]) / (T[i] - T[i - 1]), d1 = (V[i + 1] - V[i]) / (T[i + 1] - T[i]);
-  if (d0 * d1 <= 0) return 0;
-  return Math.sign(d0) * Math.min(Math.abs(d0 + d1) / 2, 3 * Math.min(Math.abs(d0), Math.abs(d1)));
-}
-function hermite(T, V, i, u, m0 = tangent(T, V, i), m1 = tangent(T, V, i + 1)) {
-  const h = T[i + 1] - T[i], u2 = u * u, u3 = u2 * u;
-  return (2 * u3 - 3 * u2 + 1) * V[i] + (u3 - 2 * u2 + u) * h * m0 + (3 * u2 - 2 * u3) * V[i + 1] + (u3 - u2) * h * m1;
-}
-// 回傳 [前一個 key, 後一個 key, 進度 0–1]
-function seg(list, time) {
-  let i = 0;
-  while (i < list.length - 1 && list[i + 1].t <= time) i++;
-  return i === list.length - 1 ? [i, i, 0] : [i, i + 1, (time - list[i].t) / (list[i + 1].t - list[i].t)];
-}
-
-// SVG 元件只建立一次，每格更新座標
 const SVGNS = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs) => {
   const n = document.createElementNS(SVGNS, tag);
@@ -582,11 +416,6 @@ const svgEl = (tag, attrs) => {
   return n;
 };
 svgEl('line', { class: 'court', x1: 0, y1: GROUND + 1, x2: 240, y2: GROUND + 1 });
-const hoop = [
-  svgEl('line', { class: 'court', x1: 228, y1: 15, x2: 228, y2: 58 }),
-  svgEl('polyline', { class: 'court', points: '202,45 206,62 220,62 224,45' }),
-  svgEl('line', { class: 'rim', x1: 200, y1: 45, x2: 226, y2: 45 })
-];
 const fig = {
   farArm: svgEl('path', { class: 'far' }), farLeg: svgEl('path', { class: 'far' }),
   body: svgEl('path', { class: 'body' }), head: svgEl('circle', { class: 'head', r: 8 }),
@@ -594,92 +423,46 @@ const fig = {
   nearLeg: svgEl('path', { class: 'near' }), nearArm: svgEl('path', { class: 'near' }),
   ball: svgEl('circle', { class: 'ball', r: BALL_R })
 };
+const PATHS = ['farArm', 'farLeg', 'body', 'nose', 'nearLeg', 'nearArm'];
 // 關節點（可切換顯示）
 const DOTS = ['p', 'm', 'c', 'n', 'nk', 'h', ...['s', 'e', 'w', 'g', 'q', 'u', 'h', 'k', 'a', 'l', 'o', 't'].flatMap(s => [s + 'N', s + 'F'])];
 const dots = DOTS.map(() => svgEl('circle', { class: 'dot', r: 1.8 }));
 $('demo-dots').onclick = () => $('demo-dots').classList.toggle('on', $('demo-svg').classList.toggle('dots'));
 
-let demo = null, demoTime = 0, demoPlaying = false, demoSpeed = 0.5, demoLast = 0;
-const markDemoSpeed = speedButtons($('demo-speeds'), s => { demoSpeed = s; markDemoSpeed(s); });
-markDemoSpeed(demoSpeed);
-
-// 畫火柴人：j = 各關節座標（名稱同 solve() 輸出），ball = 球心或 null。示範動畫及複製真人動作共用。
-function drawFigure(j, ball) {
+// 各部分的路徑；j = 各關節座標（N = 靠近鏡頭一邊，F = 另一邊）
+function figurePaths(j) {
   const pt = n => j[n].map(v => v.toFixed(1)).join(',');
   const line = (...names) => 'M' + names.map(pt).join(' L');
   const arm = s => `${line('s' + s, 'e' + s, 'w' + s, 'g' + s, 'q' + s)} ${line('w' + s, 'u' + s)}`;
   const leg = s => `${line('h' + s, 'k' + s, 'a' + s, 'l' + s, 'o' + s, 't' + s)} ${line('a' + s, 'o' + s)}`;
-  fig.farArm.setAttribute('d', arm('F')); fig.farLeg.setAttribute('d', leg('F'));
-  fig.nearArm.setAttribute('d', arm('N')); fig.nearLeg.setAttribute('d', leg('N'));
-  fig.body.setAttribute('d', `${line('hF', 'hN')} ${line('p', 'm', 'c', 'n', 'nk', 'h')} ${line('sF', 'sN')}`);
+  return {
+    farArm: arm('F'), farLeg: leg('F'), nearArm: arm('N'), nearLeg: leg('N'),
+    body: `${line('hF', 'hN')} ${line('p', 'm', 'c', 'n', 'nk', 'h')} ${line('sF', 'sN')}`,
+    nose: j.nose ? line('ns', 'nose') : ''
+  };
+}
+function drawFigure(j, ball) {
+  const d = figurePaths(j);
+  for (const k of PATHS) fig[k].setAttribute('d', d[k]);
   fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
-  fig.nose.setAttribute('d', j.nose ? line('ns', 'nose') : '');
   DOTS.forEach((n, x) => { dots[x].setAttribute('cx', j[n][0]); dots[x].setAttribute('cy', j[n][1]); });
+  for (const n of [...Object.values(fig), ...dots]) n.style.visibility = '';
   fig.ball.style.display = ball ? '' : 'none';
   if (ball) { fig.ball.setAttribute('cx', ball[0]); fig.ball.setAttribute('cy', ball[1]); }
 }
-
-function drawDemo() {
-  const d = demo;
-  const [i, k, u] = seg(d.keys, demoTime);
-  const T = d.keys.map(key => key.t);
-  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front, d.hoop && [213, 45]);
-  let pos = null;
-  if (d.ball.length) {
-    const [bi, bk, bu] = seg(d.ball, demoTime);
-    const A = d.ball[bi].at, B = d.ball[bk].at;
-    if (bi === bk || (typeof A === 'string' && A === B)) pos = ballAt(A, j);   // 一直在手上
-    else {
-      // 球的路線同樣用平滑曲線；觸地那一格保持直線進出，反彈才夠利落
-      const BT = d.ball.map(b => b.t), at = d.ball.map(b => ballAt(b.at, j));
-      const floor = n => d.ball[n].at[1] === 'floor';
-      pos = [0, 1].map(c => {
-        const V = at.map(p => p[c]), slope = (V[bk] - V[bi]) / (BT[bk] - BT[bi]);
-        return hermite(BT, V, bi, bu, floor(bi) ? slope : tangent(BT, V, bi), floor(bk) ? slope : tangent(BT, V, bk));
-      });
-    }
-  }
-  drawFigure(j, pos);
-  // 目前階段 = 時間上最近的一個有 label 的 key
-  const phase = d.keys.filter(k => k.label && k.t <= demoTime + 1e-6).at(-1) ?? d.keys[0];
-  $('demo-label').textContent = phase.label;
-  $('demo-cue').textContent = phase.cue;
-  for (const b of $('demo-phases').children) b.classList.toggle('on', +b.dataset.t === phase.t);
-  $('demo-seek').value = demoTime;
+function hideFigure() { for (const n of [...Object.values(fig), ...dots]) n.style.visibility = 'hidden'; }
+// 定格小圖（動作拆解用），畫面裁到火柴人附近
+function figureSvg(j, ball) {
+  const d = figurePaths(j), xs = DOTS.map(n => j[n][0]), ys = DOTS.map(n => j[n][1]);
+  if (ball) { xs.push(ball[0]); ys.push(ball[1]); }
+  const x0 = Math.min(...xs) - 12, y0 = Math.min(...ys) - 12, w = Math.max(...xs) + 12 - x0, h = Math.max(GROUND + 4, ...ys) - y0;
+  const n = v => v.toFixed(1);
+  return `<svg viewBox="${n(x0)} ${n(y0)} ${n(w)} ${n(h)}" aria-hidden="true">`
+    + `<line class="court" x1="${n(x0)}" y1="${GROUND + 1}" x2="${n(x0 + w)}" y2="${GROUND + 1}"/>`
+    + PATHS.map(k => `<path class="${fig[k].getAttribute('class')}" d="${d[k]}"/>`).join('')
+    + `<circle class="head" r="8" cx="${n(j.h[0])}" cy="${n(j.h[1])}"/>`
+    + (ball ? `<circle class="ball" r="${BALL_R}" cx="${n(ball[0])}" cy="${n(ball[1])}"/>` : '') + '</svg>';
 }
-
-function loadDemo(action) {
-  pauseDemo();
-  demo = DEMOS[action];
-  $('compare').classList.toggle('solo', !demo);   // 「其他」沒有示範，影片佔全寬
-  $('lab-demo').hidden = !demo;
-  if (!demo) return;
-  applyRightVisuals();
-  $('demo-seek').max = demo.end;
-  $('demo-phases').replaceChildren(...demo.keys.filter(k => k.label).map(k => el('button', {
-    textContent: k.label, dataset: { t: k.t }, onclick: () => { pauseDemo(); demoTime = k.t; drawDemo(); }
-  })));
-  demoTime = 0;
-  drawDemo();
-}
-
-function tickDemo(now) {
-  if (!demoPlaying) return;
-  demoTime += Math.max(0, now - demoLast) / 1000 * demoSpeed;  // 首格的時間戳可能早於 performance.now()
-  demoLast = now;
-  if (demoTime > demo.end) demoTime = 0;
-  drawDemo();
-  requestAnimationFrame(tickDemo);
-}
-function pauseDemo() { demoPlaying = false; $('demo-play').textContent = '播放示範'; }
-$('demo-play').onclick = () => {
-  if (demoPlaying) return pauseDemo();
-  demoPlaying = true; demoLast = performance.now();
-  $('demo-play').textContent = '暫停';
-  requestAnimationFrame(tickDemo);
-};
-$('demo-seek').oninput = e => { pauseDemo(); demoTime = +e.target.value; drawDemo(); };
-$('action').onchange = () => loadDemo($('action').value);
 
 // ---- 骨架分析：MediaPipe 在瀏覽器內逐格辨識，影片不會上傳 ----
 // Holistic：身體 33 點（含 3D 世界座標）＋左右手各 21 點＋臉部 478 點；EfficientDet：籃球位置。
@@ -689,7 +472,7 @@ const HOLISTIC_MODEL = MODEL_URL + 'holistic_landmarker/holistic_landmarker/floa
 const BALL_MODEL = MODEL_URL + 'object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite';
 const ANALYZE_FPS = 30;        // 每秒分析格數
 const MAX_FRAMES = 900;        // 長片自動降低格數，避免分析太久
-const ANALYSIS_VERSION = 2;    // 分析方法改變時加一，方便比較新舊結果
+const ANALYSIS_VERSION = 3;    // 分析方法改變時加一，方便比較新舊結果
 const MIN_VIS = 0.5;           // 關節可見度低於此值就不計算、不繪畫
 // Pose 33 點索引；[左, 右] 指球員本人的左右
 const PL = { sh: [11, 12], el: [13, 14], wr: [15, 16], hip: [23, 24], kn: [25, 26], an: [27, 28], toe: [31, 32] };
@@ -766,8 +549,7 @@ async function analyzeClip(clip, blob, status) {
   try {
     v.src = url;
     await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('影片無法讀取')); });
-    // 示範片可只分析開頭一段（clip.analyzeTo 秒），免得試用時等太久
-    const dur = Math.min(v.duration, clip.analyzeTo ?? Infinity), fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
+    const dur = v.duration, fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
     const W = v.videoWidth, H = v.videoHeight, base = mpClock + 1000, frames = [];
     const crop = document.createElement('canvas'), cctx2 = crop.getContext('2d');
     let box = null;
@@ -789,11 +571,76 @@ async function analyzeClip(clip, blob, status) {
       if (i % 3 === 0 || i === n - 1) status(`分析中 ${i + 1} / ${n} 格…`);
     }
     mpClock = Math.round(base + dur * 1000) + n + 1;
-    return { id: clip.id, version: ANALYSIS_VERSION, fps, w: W, h: H, created: Date.now(), frames };
+    const ballTrack = await refineBall(v, frames, W, H, fps, status);
+    return { id: clip.id, version: ANALYSIS_VERSION, fps, w: W, h: H, created: Date.now(), frames, ballTrack };
   } finally {
     v.remove();
     URL.revokeObjectURL(url);
   }
+}
+
+// ---- 籃球補追蹤 ----
+// 偵測器只在部分畫面找到籃球（被手遮住、動得快、太細）。以偵測到的格為起點，用影像比對
+// （正規化互相關 NCC，比對球的顏色外觀）向前、向後逐格追蹤，直到遇到下一個偵測結果或比對分數太低。
+const NCC_MIN = 0.55;          // 低於此分數視為跟丟
+const NCC_SIZE = 16;           // 比對時把球附近縮放到約 16 像素，兼顧速度與準確度
+async function refineBall(v, frames, W, H, fps, status) {
+  const n = frames.length, det = trackBall({ frames, w: W, h: H, fps });   // 已去掉靜止誤認
+  const px = b => [b[0] * W, b[1] * H, b[2] * W];
+  const can = document.createElement('canvas'), ctx = can.getContext('2d', { willReadFrequently: true });
+  const seek = async i => { const t = frames[i].t; if (Math.abs(v.currentTime - t) > 1e-4) await new Promise(r => { v.onseeked = r; v.currentTime = t; }); };
+  // 取以 (cx, cy) 為中心、邊長 size 像素的畫面，縮成 out × out 的 RGB 數組
+  const grab = (cx, cy, size, out) => {
+    can.width = can.height = out;
+    ctx.drawImage(v, cx - size / 2, cy - size / 2, size, size, 0, 0, out, out);
+    const d = ctx.getImageData(0, 0, out, out).data, g = new Float32Array(out * out * 3);
+    for (let i = 0, k = 0; i < d.length; i += 4) { g[k++] = d[i]; g[k++] = d[i + 1]; g[k++] = d[i + 2]; }
+    return g;
+  };
+  // 在 S（sw × sw）中找最像 T（tw × tw）的位置，回傳 [左上 x, 左上 y, 分數]
+  const match = (S, sw, T, tw) => {
+    const N = tw * tw * 3, tm = T.reduce((a, b) => a + b, 0) / N, tv = T.reduce((a, b) => a + (b - tm) ** 2, 0);
+    let best = [0, 0, -1];
+    for (let oy = 0; oy <= sw - tw; oy++) for (let ox = 0; ox <= sw - tw; ox++) {
+      let sm = 0, cov = 0, sv = 0;
+      for (let y = 0; y < tw; y++) { const row = ((oy + y) * sw + ox) * 3; for (let x = 0; x < tw * 3; x++) sm += S[row + x]; }
+      sm /= N;
+      for (let y = 0; y < tw; y++) {
+        const row = ((oy + y) * sw + ox) * 3, trow = y * tw * 3;
+        for (let x = 0; x < tw * 3; x++) { const a = S[row + x] - sm; cov += a * (T[trow + x] - tm); sv += a * a; }
+      }
+      const score = cov / Math.sqrt(sv * tv || 1);
+      if (score > best[2]) best = [ox, oy, score];
+    }
+    return best;
+  };
+  const found = det.map(b => b && { b: px(b), score: 1 });
+  // 由偵測到的格 a 向 dir（+1 向後、-1 向前）追蹤
+  const follow = async (a, dir) => {
+    let [x, y, r] = px(det[a]), vx = 0, vy = 0;
+    if (det[a - dir]) { const p = px(det[a - dir]); vx = x - p[0]; vy = y - p[1]; }
+    const size = r * 2.4, k = NCC_SIZE / size;
+    await seek(a);
+    let T = grab(x, y, size, NCC_SIZE);
+    for (let i = a + dir, steps = 0; i >= 0 && i < n && !det[i] && steps < fps * 1.5; i += dir, steps++) {
+      await seek(i);
+      const cx = x + vx, cy = y + vy, region = size * 3 + (Math.abs(vx) + Math.abs(vy)) * 2, sw = Math.round(region * k);
+      const [ox, oy, score] = match(grab(cx, cy, region, sw), sw, T, NCC_SIZE);
+      if (score < NCC_MIN) break;
+      const nx = cx - region / 2 + (ox + NCC_SIZE / 2) / k, ny = cy - region / 2 + (oy + NCC_SIZE / 2) / k;
+      vx = (vx + nx - x) / 2; vy = (vy + ny - y) / 2; x = nx; y = ny;
+      if (!found[i] || found[i].score < score) found[i] = { b: [x, y, r], score };
+      const now = grab(x, y, size, NCC_SIZE);   // 範本慢慢更新，應付球旋轉、光暗變化
+      T = T.map((t, q) => t * 0.85 + now[q] * 0.15);
+    }
+  };
+  const anchors = det.flatMap((b, i) => b ? [i] : []);
+  for (const [q, a] of anchors.entries()) {
+    if (q % 5 === 0) status(`追蹤籃球 ${q + 1} / ${anchors.length}…`);
+    if (a + 1 < n && !det[a + 1]) await follow(a, 1);
+    if (a > 0 && !det[a - 1]) await follow(a, -1);
+  }
+  return found.map(f => f && [f.b[0] / W, f.b[1] / H, f.b[2] / W, f.score]);
 }
 
 // ---- 由關節座標計算指標 ----
@@ -836,7 +683,13 @@ function metricsOf(f, A) {
 }
 
 // 以肩寬（像素）為單位量距離，球員遠近不同也可比較
-const shoulderPx = (A, f) => f.pose ? Math.hypot((f.pose[44] - f.pose[48]) * A.w, (f.pose[45] - f.pose[49]) * A.h) || 50 : 50;
+// 側面拍攝時兩邊肩膀重疊、肩寬很細，所以取肩寬與 0.6 倍軀幹長度中較大者
+const shoulderPx = (A, f) => {
+  const p = f.pose;
+  if (!p) return 50;
+  const at = i => [p[i * 4] * A.w, p[i * 4 + 1] * A.h], mid = (a, b) => at(a).map((v, k) => (v + at(b)[k]) / 2);
+  return Math.max(Math.hypot(...sub(at(11), at(12))), Math.hypot(...sub(mid(11, 12), mid(23, 24))) * 0.6) || 50;
+};
 const handDist = (A, f, c) => f.pose
   ? Math.min(...[15, 16].map(j => Math.hypot((c[0] - f.pose[j * 4]) * A.w, (c[1] - f.pose[j * 4 + 1]) * A.h))) / shoulderPx(A, f)
   : Infinity;
@@ -885,10 +738,10 @@ function cameraView(A) {
   return { side: total > 0 && side / total >= 0.5, facing: facing < 0 ? -1 : 1 };
 }
 
-// 關鍵時刻。起跳以「腳踝比前後 0.6 秒內站地位置高出多少」判斷，球員走近或走遠鏡頭也不會誤判。
+// 關鍵時刻（每個附 shot＝第幾球）。起跳以「腳踝比前後 0.6 秒內站地位置高出多少」判斷，球員走近或走遠鏡頭也不會誤判。
 function findEvents(A) {
   const F = A.frames, n = F.length, win = Math.round(A.fps * 0.6), ev = [];
-  const at = (label, i) => { if (i >= 0) ev.push({ label, i }); };
+  const at = (label, i, shot) => { if (i >= 0) ev.push({ label, i, shot }); };
   const y = (f, j) => f.pose && f.pose[j * 4 + 3] >= MIN_VIS ? f.pose[j * 4 + 1] : null;
   const ank = F.map(f => { const a = y(f, 27), b = y(f, 28); return a != null && b != null ? (a + b) / 2 : null; });
   const rise = ank.map((a, i) => {
@@ -906,27 +759,36 @@ function findEvents(A) {
     for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) { const v = val(i); if (v != null && (best < 0 || better(v, val(best)))) best = i; }
     return best;
   };
-  const apex = argBest(0, n - 1, i => rise[i], (a, b) => a > b);
-  if (apex < 0 || rise[apex] < 0.06) {
-    at('膝蓋最彎', argBest(0, n - 1, knee, (a, b) => a < b));
-    return ev;
-  }
-  // 離地與落地：腳踝高出地面不足最高點的兩成即視為著地（避免把起跳前的小碎步當成跳起）
-  const air = Math.max(0.02, rise[apex] * 0.2);
-  let take = apex, land = apex;
-  while (take > 0 && (rise[take - 1] ?? 0) > air) take--;
-  while (land < n - 1 && (rise[land + 1] ?? 0) > air) land++;
-  take = Math.max(take - 1, 0); land = Math.min(land + 1, n - 1);
-  at('蓄力最低', argBest(take - Math.round(A.fps * 1.2), take, knee, (a, b) => a < b));
-  at('起跳', take); at('最高點', apex); at('落地', land);
-  // 出手：出手一刻球常被手遮住，所以取騰空期間「球首次在頭頂上方、離手超過一個肩寬」的一格
-  for (let i = take; i <= land; i++) {
-    const b = A.track[i], f = F[i];
-    if (b && f.pose && handDist(A, f, b) > 1 && b[1] < f.pose[1]) { at('出手', i); return ev.sort((a, b2) => a.i - b2.i); }
-  }
-  // 看不到球時：以起跳至最高點後一刻之間，投籃手（最高點時較高那隻）手肘最伸直的一格估算
-  const side = (y(F[apex], 16) ?? 1) < (y(F[apex], 15) ?? 1) ? 1 : 0;
-  at('出手（估算）', argBest(take, Math.min(land, apex + Math.round(A.fps * 0.25)), i => A.metrics[i]?.side[side].elbow, (a, b) => a > b));
+  // 每一次跳起：離地高度至少 6%，並且是前後 0.6 秒內最高的一格（一段影片可以有幾球）
+  const apexes = rise.flatMap((r, i) => r != null && r >= 0.06
+    && rise.slice(Math.max(0, i - win), i).every(q => q == null || q < r)
+    && rise.slice(i + 1, i + win + 1).every(q => q == null || q <= r) ? [i] : []);
+  let prevLand = 0, shotNo = 0;
+  apexes.forEach(apex => {
+    let shot;
+    // 離地與落地：腳踝高出地面不足最高點的兩成即視為著地（避免把起跳前的小碎步當成跳起）
+    const air = Math.max(0.02, rise[apex] * 0.2);
+    let take = apex, land = apex;
+    while (take > prevLand && (rise[take - 1] ?? 0) > air) take--;
+    while (land < n - 1 && (rise[land + 1] ?? 0) > air) land++;
+    take = Math.max(take - 1, prevLand); land = Math.min(land + 1, n - 1);
+    // 只算投籃：騰空至少 0.25 秒，而且最高點時最少一隻手高過頭（排除碎步、小跳）
+    const handUp = [15, 16].some(w => y(F[apex], w) != null && y(F[apex], 0) != null && y(F[apex], w) < y(F[apex], 0));
+    if ((land - take) / A.fps < 0.25 || !handUp) return;
+    shot = shotNo++;
+    at('蓄力最低', argBest(Math.max(prevLand, take - Math.round(A.fps * 1.2)), take, knee, (a, b) => a < b), shot);
+    at('起跳', take, shot); at('最高點', apex, shot); at('落地', land, shot);
+    prevLand = land;
+    // 出手：出手一刻球常被手遮住，所以取騰空期間「球首次在頭頂上方、離手超過一個肩寬」的一格
+    for (let i = take; i <= land; i++) {
+      const b = A.track[i], f = F[i];
+      if (b && f.pose && handDist(A, f, b) > 1 && b[1] < f.pose[1]) return at('出手', i, shot);
+    }
+    // 看不到球時：以起跳至最高點後一刻之間，投籃手（最高點時較高那隻）手肘最伸直的一格估算
+    const side = (y(F[apex], 16) ?? 1) < (y(F[apex], 15) ?? 1) ? 1 : 0;
+    at('出手（估算）', argBest(take, Math.min(land, apex + Math.round(A.fps * 0.25)), i => A.metrics[i]?.side[side].elbow, (a, b) => a > b), shot);
+  });
+  if (!ev.length) at('膝蓋最彎', argBest(0, n - 1, knee, (a, b) => a < b), 0);   // 沒有投籃動作
   return ev.sort((a, b) => a.i - b.i);
 }
 
@@ -941,13 +803,10 @@ $('ana-legend').textContent = '實線：膝蓋角度　虛線：手肘角度　�
 function showAnalysis(A) {
   analysis = A;
   $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A || !!current?.sample;
-  if (!A) { $('ana-status').textContent = ANA_HINT; buildSync(); drawOverlay(); return; }
-  A.metrics ??= A.frames.map(f => metricsOf(f, A));
-  A.track ??= trackBall(A);
-  A.events ??= findEvents(A);
-  A.view ??= cameraView(A);
-  A.mimic ??= buildMimic(A);
-  buildSync();
+  if (!A) { $('ana-status').textContent = ANA_HINT; updateRight(); renderBreakdown(); drawOverlay(); return; }
+  prepare(A);
+  updateRight();
+  renderBreakdown();
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
   const partial = A.frames.at(-1).t < (current?.duration ?? 0) - 0.5 ? `（只分析頭 ${fmt(A.frames.at(-1).t)} 秒）` : '';
@@ -955,8 +814,9 @@ function showAnalysis(A) {
     + (A.view.side ? `側面拍攝，球員向${A.view.facing > 0 ? '右' : '左'}。` : '這段影片不是側面拍攝，與側面的示範只能粗略對照；建議從側面重拍。')
     + (body < 50 ? '大部分畫面未能辨識身體，請全身入鏡、光線充足後重拍。' : '')
     + ((A.version ?? 1) < ANALYSIS_VERSION ? '這是舊版分析，清除後重新分析可得到更準確的結果。' : '');
+  const multi = new Set(A.events.map(e => e.shot)).size > 1;
   $('ana-events').replaceChildren(...(A.events.length ? A.events.map(e => el('button', {
-    textContent: `${e.label} ${fmt(A.frames[e.i].t)} 秒`, onclick: () => { video.pause(); video.currentTime = A.frames[e.i].t; }
+    textContent: `${multi ? `第 ${e.shot + 1} 球 ` : ''}${e.label} ${fmt(A.frames[e.i].t)} 秒`, onclick: () => { video.pause(); video.currentTime = A.frames[e.i].t; }
   })) : [el('span', { className: 'meta', textContent: '未偵測到關鍵時刻。' })]));
   drawOverlay();
 }
@@ -965,6 +825,7 @@ $('ana-run').onclick = async () => {
   if (analyzing) return;
   const clip = current, status = s => { if (current === clip) $('ana-status').textContent = s; };
   analyzing = true; $('ana-run').disabled = true; video.pause();
+  updateRight(); renderBreakdown();
   try {
     const A = await analyzeClip(clip, await clipVideo(clip), status);
     await putAnalysis(A);
@@ -1096,52 +957,87 @@ if (video.requestVideoFrameCallback) {
   video.requestVideoFrameCallback(onFrame);
 }
 
-// ---- 影片與示範同步 ----
-// 把分析找到的關鍵時刻對應示範動畫的階段，兩邊各按自己的節奏對齊：影片去到「出手」，火柴人也在「出手」。
-const EVENT_PHASE = {
-  投籃: { 蓄力最低: '下蹲蓄力', 起跳: '起跳舉球', 出手: '出手', 落地: '落地與隨球' },
-  急停跳投: { 蓄力最低: '收球蓄力', 起跳: '起跳出手', 出手: '起跳出手', 落地: '落地與隨球' },
-  上籃: { 蓄力最低: '收球・第一步', 起跳: '第二步起跳', 出手: '舉球上籃', 落地: '落地' }
+// ---- 動作拆解 ----
+// 把分析找到的關鍵時刻逐一拆開：火柴人定格、實際量度數值及要點。
+// 上載自己的影片時，數值會與示範片（動作良好的參考）並列，方便看出差別。
+const PHASE_TIPS = {
+  蓄力最低: '屈膝降低重心，把球帶到下巴前方，手肘對準籃框。',
+  起跳: '雙腳同時蹬地，向上跳而不是向前衝。',
+  出手: '接近最高點時伸直手臂、手腕下壓，球從食指與中指離手。',
+  最高點: '保持身體垂直、手臂伸直，眼睛望向籃框。',
+  落地: '在起跳位置附近雙腳落地、屈膝緩衝，手臂保持隨球姿勢。',
+  膝蓋最彎: '屈膝時保持背部挺直，重心落在雙腳之間。'
 };
-let syncAnchors = null, demoManual = false;
-function buildSync() {
-  syncAnchors = null;
-  applyRightVisuals();
-  const map = current && EVENT_PHASE[current.action], d = current && DEMOS[current.action];
-  let hint = '分析影片後，火柴人會跟住你的動作節奏同步。';
-  if (analysis && map && d) {
-    const pts = [{ v: 0, d: 0 }];
-    for (const e of analysis.events) {
-      const name = map[e.label.replace('（估算）', '')], key = name && d.keys.find(k => k.label === name);
-      if (key && key.t >= pts.at(-1).d && analysis.frames[e.i].t > pts.at(-1).v) pts.push({ v: analysis.frames[e.i].t, d: key.t });
-    }
-    if (pts.length >= 3) {
-      pts.push({ v: Math.max(current.duration, pts.at(-1).v + 0.01), d: d.end });
-      syncAnchors = pts;
-      hint = `火柴人已按 ${pts.length - 2} 個關鍵時刻與影片同步；自行播放示範會暫停同步，再播放或拖動影片即恢復。`;
-    } else hint = '影片中未找到足夠的關鍵時刻，火柴人未能同步。';
-  } else if (current && d && !map) hint = '這個動作暫未支援與影片同步。';
-  $('sync-hint').textContent = hint;
+const bothSides = (m, k) => { const v = [m.side[0][k], m.side[1][k]].filter(x => x != null); return v.length ? v.reduce((a, b) => a + b) / v.length : null; };
+// 每個階段要看的數值：[名稱, 取值(m, 投籃手), 是否比例]
+const PHASE_METRICS = {
+  蓄力最低: [['膝蓋角度', m => bothSides(m, 'knee')], ['髖部角度', m => bothSides(m, 'hip')], ['軀幹前傾', m => m.lean]],
+  起跳: [['膝蓋角度', m => bothSides(m, 'knee')], ['腳踝角度', m => bothSides(m, 'ankle')]],
+  出手: [['投籃手手肘', (m, s) => m.side[s].elbow], ['投籃手肩部', (m, s) => m.side[s].shoulder], ['軀幹前傾', m => m.lean]],
+  最高點: [['投籃手手肘', (m, s) => m.side[s].elbow], ['膝蓋角度', m => bothSides(m, 'knee')]],
+  落地: [['膝蓋角度', m => bothSides(m, 'knee')], ['站距 ÷ 肩寬', m => m.stance, true]],
+  膝蓋最彎: [['膝蓋角度', m => bothSides(m, 'knee')], ['軀幹前傾', m => m.lean]]
+};
+const phaseKey = label => label.replace('（估算）', '');
+// 投籃手：最高點（或出手）時較高的手腕
+function shootingSide(A) {
+  const e = A.events.find(e => e.label === '最高點') ?? A.events.find(e => e.label.startsWith('出手'));
+  const p = e && A.frames[e.i].pose;
+  return p && p[16 * 4 + 1] < p[15 * 4 + 1] ? 1 : 0;
 }
-function syncDemo() {
-  if (!syncAnchors || demoManual || demo !== DEMOS[current?.action]) return;
-  const t = video.currentTime, a = syncAnchors;
-  let k = 0;
-  while (k < a.length - 2 && a[k + 1].v <= t) k++;
-  const u = Math.min(Math.max((t - a[k].v) / (a[k + 1].v - a[k].v), 0), 1);
-  demoTime = a[k].d + (a[k + 1].d - a[k].d) * u;
-  drawDemo();
+// 補上由原始關節座標推算的資料
+function prepare(A) {
+  A.metrics ??= A.frames.map(f => metricsOf(f, A));
+  A.track ??= A.ballTrack ?? trackBall(A);
+  A.events ??= findEvents(A);
+  A.view ??= cameraView(A);
+  A.mimic ??= buildMimic(A);
+  A.side ??= shootingSide(A);
+  return A;
 }
-// 自行操作示範時暫停同步並切換到「標準示範」；影片再播放或跳轉就恢復同步
-for (const id of ['demo-play', 'demo-seek', 'demo-phases']) $(id).addEventListener('pointerdown', () => { demoManual = true; setRightMode('demo'); });
+
+async function renderBreakdown() {
+  const A = analysis, box = $('breakdown'), note = text => box.replaceChildren(el('p', { className: 'empty', textContent: text }));
+  if (!A?.mimic) return note(analyzing ? '分析中，完成後會把動作逐步拆解。' : '分析影片後，這裡會把動作逐步拆解。');
+  if (!A.events.length) return note('影片中未找到可拆解的關鍵時刻。');
+  const refData = current.sample ? null : await sampleAnalysis();
+  if (A !== analysis) return;   // 等待期間已換了影片
+  const ref = refData && prepare(refData);
+  const val = (v, ratio) => v == null ? '—' : ratio ? v.toFixed(2) : `${Math.round(v)}°`;
+  // 一段影片有幾球時可逐球拆解；示範片固定用第一球比較
+  const shots = [...new Set(A.events.map(e => e.shot))];
+  A.pickShot = shots.includes(A.pickShot) ? A.pickShot : shots[0];
+  const picker = shots.length > 1 ? el('div', { className: 'row', style: 'margin:6px 0' }, shots.map(sh => el('button', {
+    className: sh === A.pickShot ? 'on' : '', textContent: `第 ${sh + 1} 球`, onclick: () => { A.pickShot = sh; renderBreakdown(); }
+  }))) : null;
+  const refShot = ref?.events[0]?.shot;
+  box.replaceChildren(...(picker ? [picker] : []), ...A.events.filter(e => e.shot === A.pickShot).map(e => {
+    const key = phaseKey(e.label), t = A.frames[e.i].t, m = A.metrics[e.i], { j, ball } = mimicAt(A.mimic, t);
+    const re = ref?.events.find(r => r.shot === refShot && phaseKey(r.label) === key), rm = re && ref.metrics[re.i];
+    const head = [el('th'), el('th', { textContent: ref ? '你' : '數值' }), ...(ref ? [el('th', { textContent: '示範片' })] : [])];
+    const rows = (PHASE_METRICS[key] ?? []).map(([name, f, ratio]) => el('tr', {}, [
+      el('td', { textContent: name }), el('td', { textContent: m ? val(f(m, A.side), ratio) : '—' }),
+      ...(ref ? [el('td', { textContent: rm ? val(f(rm, ref.side), ratio) : '—' })] : [])
+    ]));
+    return el('div', { className: 'step' }, [
+      el('div', { className: 'demo step-pic', innerHTML: figureSvg(j, ball) }),
+      el('div', { className: 'grow' }, [
+        el('button', { className: 'link step-title', textContent: `${e.label}・${fmt(t)} 秒`, onclick: () => { video.pause(); video.currentTime = t; } }),
+        el('table', { className: 'metrics' }, [el('tr', {}, head), ...rows]),
+        el('p', { className: 'hint', textContent: PHASE_TIPS[key] ?? '' })
+      ])
+    ]);
+  }), el('p', { className: 'hint', textContent: ref
+    ? '示範片數值來自一名動作良好的球員，只供參考，並非唯一標準。'
+    : '示範片是動作良好的參考；上載你的影片後，數值會與示範片並列比較。' }));
+}
 
 // ---- 右邊火柴人複製真人動作（「你的動作」）----
 // 用分析得到的關節座標逐格驅動火柴人：每個座標的時間序列先補洞、平滑，播放時在格與格之間用三次曲線補間，
 // 並以螢幕更新率重畫，所以慢鏡也流暢。座標按全片固定比例換算，保留球員的移動和跳躍高度，也保留原本方向。
 const MIMIC_VIS = 0.3;        // 低於此可見度的點視為缺漏，由前後格補上
 const MIMIC_SMOOTH = 1;       // 高斯平滑的標準差（格）；太大會抹走快速動作
-const MIMIC_HEIGHT = 108;     // 地面至頭部中心的高度（SVG 單位，與示範火柴人一致）
-let rightMode = 'mimic';      // 'mimic' = 你的動作；'demo' = 標準示範
+const MIMIC_HEIGHT = 108;     // 地面至頭部中心的高度（SVG 單位）
 
 // 把有缺漏的時間序列補齊（線性補間，頭尾沿用最近值），再做高斯平滑
 function fillSmooth(v, sigma) {
@@ -1189,6 +1085,23 @@ function buildMimic(A) {
     const b = ball.findLastIndex((p, k) => k < i && p), a = ball.findIndex((p, k) => k > i && p);
     if (b >= 0 && a >= 0 && a - b <= 6) ball[i] = [0, 1].map(c => ball[b][c] + (ball[a][c] - ball[b][c]) * (i - b) / (a - b));
   }
+  // 球被手拿着而看不到時（例如收球、舉球），跟住最近那隻手，保持最後一次看到時的相對位置；最多 2 秒
+  const near = i => {
+    const unit = Math.hypot(...sub(track.eN[i], track.wN[i])) * 1.5;   // 1.5 個前臂長度內算拿着
+    return ['N', 'F'].map(s => [s, Math.hypot(...sub(ball[i], track['ix' + s][i]))]).filter(([, d]) => d < unit).sort((a, b) => a[1] - b[1])[0]?.[0];
+  };
+  for (const dir of [1, -1]) {
+    let hold = null;
+    for (let i = dir > 0 ? 0 : n - 1, gap = 0; i >= 0 && i < n; i += dir) {
+      if (ball[i] && !ball[i].held) {
+        const s = near(i);
+        hold = s && { s, off: sub(ball[i], track['ix' + s][i]) };
+        gap = 0;
+      } else if (hold && !ball[i] && ++gap <= A.fps * 2) {
+        ball[i] = Object.assign([0, 1].map(c => track['ix' + hold.s][i][c] + hold.off[c]), { held: true });
+      }
+    }
+  }
   // 換算到 SVG。鏡頭可能跟拍、推近，所以地面、比例、水平位置都逐格估算，只去掉慢變化（鏡頭），保留快動作（跳躍、踏步）：
   // - 比例：肩→髖→膝→踝的骨長總和，彎腰屈膝也不變；
   // - 地面：前後 0.6 秒內兩邊都找得到的腳底位置（跳起時地面不會跟住升高）；
@@ -1206,12 +1119,12 @@ function buildMimic(A) {
   const toSvg = ([x, y], i) => [120 + (x - cx[i]) * scale[i], GROUND - (ground[i] - y) * scale[i]];
   const out = {};
   for (const [name, pts] of Object.entries(track)) out[name] = pts.map(toSvg);
-  return { pts: out, ball: ball.map((b, i) => b && toSvg(b, i)), n };
+  return { pts: out, ball: ball.map((b, i) => b && toSvg(b, i)), n, fps: A.fps };
 }
 
 // 播放時間 → 關節座標：Catmull-Rom 曲線在格與格之間補間，速度連續
 function mimicAt(M, t) {
-  const fi = Math.min(Math.max(t * analysis.fps, 0), M.n - 1), i = Math.floor(fi), u = fi - i;
+  const fi = Math.min(Math.max(t * M.fps, 0), M.n - 1), i = Math.floor(fi), u = fi - i;
   const at = k => Math.min(Math.max(k, 0), M.n - 1);
   const cr = (p0, p1, p2, p3) => [0, 1].map(c => 0.5 * (2 * p1[c] + (p2[c] - p0[c]) * u
     + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u * u + (3 * p1[c] - p0[c] - 3 * p2[c] + p3[c]) * u * u * u));
@@ -1219,7 +1132,7 @@ function mimicAt(M, t) {
   for (const [name, pts] of Object.entries(M.pts)) P[name] = cr(pts[at(i - 1)], pts[i], pts[at(i + 1)], pts[at(i + 2)]);
   const b0 = M.ball[i], b1 = M.ball[at(i + 1)];
   const ball = b0 && b1 ? [0, 1].map(c => b0[c] + (b1[c] - b0[c]) * u) : (u < 0.5 ? b0 : b1);
-  // 由 MediaPipe 的點組成火柴人的關節（名稱同 solve()）
+  // 由 MediaPipe 的點組成火柴人的關節（名稱同 figurePaths()）
   const mix = (a, b, k) => [0, 1].map(c => a[c] + (b[c] - a[c]) * k);
   const j = {};
   for (const S of ['N', 'F']) {
@@ -1238,43 +1151,31 @@ function mimicAt(M, t) {
 }
 
 function drawMimic(t) {
-  const A = analysis, { j, ball } = mimicAt(A.mimic, t);
+  const A = analysis;
+  if (!A.frames[frameIndex(t)].pose) {   // 這一格看不到球員，不要畫補出來的猜測
+    hideFigure();
+    $('demo-label').textContent = '畫面中看不到球員';
+    $('demo-cue').textContent = '';
+    return;
+  }
+  const { j, ball } = mimicAt(A.mimic, t);
   drawFigure(j, ball);
-  const last = A.frames.at(-1).t;
+  const out = t > A.frames.at(-1).t + 1 / A.fps;
   const ev = A.events.filter(e => A.frames[e.i].t <= t + 1e-3).at(-1);
-  const name = ev && EVENT_PHASE[current.action]?.[ev.label.replace('（估算）', '')];
-  $('demo-label').textContent = t > last + 1 / A.fps ? '這段時間未有分析' : ev ? ev.label : '準備';
-  $('demo-cue').textContent = t > last + 1 / A.fps ? '' : DEMOS[current.action]?.keys.find(k => k.label === name)?.cue ?? '';
-}
-
-// 「你的動作」不反轉、不畫籃框（位置未知）；「標準示範」按球員面向反轉，並顯示籃框
-function applyRightVisuals() {
-  const demoMode = rightMode === 'demo' || !analysis?.mimic;
-  $('demo-svg').style.transform = demoMode && analysis?.view?.side && analysis.view.facing < 0 ? 'scaleX(-1)' : '';
-  for (const n of hoop) n.style.display = demoMode && demo?.hoop ? '' : 'none';
-  for (const b of $('right-mode').children) b.classList.toggle('on', b.dataset.mode === (demoMode ? 'demo' : 'mimic'));
-  $('right-mode').children[0].disabled = !analysis?.mimic;
-}
-function setRightMode(m) {
-  if (rightMode === m) return;
-  rightMode = m;
-  applyRightVisuals();
-  if (m === 'demo' && demo) drawDemo();
-  updateRight();
+  $('demo-label').textContent = out ? '這段時間未有分析' : ev ? ev.label : '準備';
+  $('demo-cue').textContent = out || !ev ? '' : PHASE_TIPS[phaseKey(ev.label)] ?? '';
 }
 function updateRight() {
-  if (!demo && !analysis?.mimic) return;
-  if (rightMode === 'mimic' && analysis?.mimic) drawMimic(video.currentTime);
-  else syncDemo();
+  if (analysis?.mimic) return drawMimic(video.currentTime);
+  hideFigure();
+  $('demo-label').textContent = analyzing ? '分析中…' : '未有分析';
+  $('demo-cue').textContent = '分析完成後，火柴人會逐格複製影片中的動作。';
 }
-$('right-mode').onclick = e => { const m = e.target.dataset?.mode; if (m && !e.target.disabled) { demoManual = false; setRightMode(m); } };
 // 播放時以螢幕更新率重畫右邊火柴人（影片本身每秒只有 30 格）
 video.addEventListener('play', () => {
   const loop = () => { if (video.paused || video.ended) return; updateRight(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
 });
-video.addEventListener('play', () => { demoManual = false; pauseDemo(); });
-video.addEventListener('seeking', () => { demoManual = false; });
 
 openLab(SAMPLE);
 </script>
