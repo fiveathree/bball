@@ -70,7 +70,8 @@
   .demo svg .court { stroke: var(--line); stroke-width: 2; fill: none; }
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
   .demo-phase b { margin-right: 6px; }
-  .top { flex-wrap: nowrap; align-items: center; }
+  #speed { min-width: 64px; }
+  .top { flex-wrap: nowrap; align-items: center; margin-bottom: 16px; }   /* 上傳影片掣與下方關節點掣之間留空位 */
   .top h1 { margin: 0; }
   button.small { min-height: 36px; padding: 6px 12px; font-size: 14px; white-space: nowrap; }
   .compare { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; align-items: center; }
@@ -137,11 +138,11 @@
     <div class="row" style="margin-top:10px">
       <button id="first" aria-label="回到第一格" title="回到第一格">⏮</button>
       <button id="prev" aria-label="上一格" title="上一格">◀</button>
-      <button class="primary grow" id="play">播放</button>
+      <button class="primary" id="play">播放</button>
+      <button id="speed" aria-label="播放速度（按一下切換）" title="播放速度（按一下切換）">0.5×</button>
       <button id="next" aria-label="下一格" title="下一格">▶</button>
     </div>
-    <div class="row" style="margin-top:8px">
-      <span class="row grow" id="speeds"></span>
+    <div class="row" id="del-row" style="justify-content:flex-end;margin-top:6px">
       <button class="link danger" id="del">刪除這段影片</button>
     </div>
 
@@ -325,15 +326,9 @@ async function renderList() {
 const video = $('video');
 let current = null, videoUrl = null;
 
-// 速度按鈕；回傳用來標示目前速度的函式
-function speedButtons(box, pick) {
-  box.append(...SPEEDS.map(s => el('button', {
-    textContent: s === 1 ? '正常' : `${s}×`, dataset: { speed: s }, onclick: () => pick(s)
-  })));
-  return s => { for (const b of box.children) b.classList.toggle('on', +b.dataset.speed === s); };
-}
-const markSpeed = speedButtons($('speeds'), s => setSpeed(s));
-function setSpeed(s) { video.playbackRate = s; markSpeed(s); }
+// 速度：一個按鈕，按一下循環切換 0.25× → 0.5× → 正常
+function setSpeed(s) { video.playbackRate = s; $('speed').textContent = s === 1 ? '正常' : `${s}×`; }
+$('speed').onclick = () => setSpeed(SPEEDS[(SPEEDS.indexOf(video.playbackRate) + 1) % SPEEDS.length]);
 
 async function openLab(clip) {
   if (clip.sample) clip.marks = (await listClips()).find(c => c.id === clip.id)?.marks ?? [];
@@ -347,7 +342,7 @@ async function openLab(clip) {
   video.src = videoUrl;
   video.muted = true;   // 只看動作，不播聲音
   setSpeed(0.5);
-  $('del').hidden = !!clip.sample;
+  $('del-row').hidden = !!clip.sample;
   $('note').value = '';
   renderMarks();
   showAnalysis(clip.sample ? await sampleAnalysis() : await getAnalysis(clip.id));
