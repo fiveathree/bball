@@ -68,6 +68,12 @@
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
   .demo-phase b { margin-right: 6px; }
   .demo-phases button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
+  .stage { position: relative; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  table.metrics { width: 100%; border-collapse: collapse; margin: 12px 0 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  table.metrics th, table.metrics td { padding: 6px 4px; border-top: 1px solid var(--line); text-align: right; }
+  table.metrics th:first-child, table.metrics td:first-child { text-align: left; font-weight: normal; color: var(--muted); }
+  #ana-chart { display: block; width: 100%; height: 110px; cursor: pointer; }
   details > summary { cursor: pointer; font-weight: 600; }
   [hidden] { display: none !important; }
 </style>
@@ -121,7 +127,10 @@
     <h1 id="lab-title"></h1>
     <p class="sub" id="lab-meta"></p>
 
-    <video id="video" playsinline preload="auto"></video>
+    <div class="stage">
+      <video id="video" playsinline preload="auto"></video>
+      <canvas id="overlay"></canvas>
+    </div>
     <input type="range" id="seek" min="0" max="0" step="0.001" value="0" aria-label="時間軸">
     <div class="row">
       <span class="time" id="time">0.00 / 0.00 秒</span>
@@ -133,6 +142,20 @@
       <button id="next" aria-label="下一格">下一格 ▶</button>
     </div>
     <div class="row" style="margin-top:8px" id="speeds"></div>
+
+    <div class="card" id="ana" style="margin-top:16px">
+      <div class="row"><b class="grow">骨架分析</b><button class="link danger" id="ana-clear" hidden>清除分析</button></div>
+      <p class="hint" id="ana-status">在這部裝置上逐格辨識身體 33 點、雙手各 21 點、臉部 478 點及籃球位置，影片不會上傳。首次使用需下載約 26 MB 模型。</p>
+      <button class="primary" id="ana-run" style="width:100%;margin-top:10px">開始分析</button>
+      <div id="ana-out" hidden>
+        <div class="row" id="ana-layers" style="margin-top:10px"></div>
+        <div class="row" id="ana-events" style="margin-top:8px"></div>
+        <table class="metrics" id="ana-table"></table>
+        <canvas id="ana-chart" height="110" aria-label="關節角度隨時間變化"></canvas>
+        <p class="hint" id="ana-legend"></p>
+        <p class="hint">角度由單一鏡頭以 3D 估算，只供參考；看不清楚的關節不顯示數值。</p>
+      </div>
+    </div>
 
     <details class="card" id="lab-demo" style="margin-top:16px">
       <summary>示範動作</summary>
@@ -161,10 +184,12 @@ const MAX_SEC = 120;             // 單一影片長度上限
 
 // ---- IndexedDB：clips 存資料，videos 存影片檔，分開以免改筆記時重寫影片 ----
 const dbReady = new Promise((resolve, reject) => {
-  const req = indexedDB.open('bball', 1);
+  const req = indexedDB.open('bball', 2);
   req.onupgradeneeded = () => {
-    req.result.createObjectStore('clips', { keyPath: 'id' });
-    req.result.createObjectStore('videos');
+    const db = req.result, has = n => db.objectStoreNames.contains(n);
+    if (!has('clips')) db.createObjectStore('clips', { keyPath: 'id' });
+    if (!has('videos')) db.createObjectStore('videos');
+    if (!has('analyses')) db.createObjectStore('analyses', { keyPath: 'id' });   // 骨架分析結果，與影片同一個 id
   };
   req.onsuccess = () => resolve(req.result);
   req.onerror = () => reject(req.error);
@@ -186,10 +211,14 @@ const addClip = (clip, blob) => tx(['clips', 'videos'], 'readwrite', t => {
   t.objectStore('clips').put(clip);
   t.objectStore('videos').put(blob, clip.id);
 });
-const deleteClip = id => tx(['clips', 'videos'], 'readwrite', t => {
+const deleteClip = id => tx(['clips', 'videos', 'analyses'], 'readwrite', t => {
   t.objectStore('clips').delete(id);
   t.objectStore('videos').delete(id);
+  t.objectStore('analyses').delete(id);
 });
+const getAnalysis = id => tx('analyses', 'readonly', t => t.objectStore('analyses').get(id));
+const putAnalysis = a => tx('analyses', 'readwrite', t => { t.objectStore('analyses').put(a); });
+const deleteAnalysis = id => tx('analyses', 'readwrite', t => { t.objectStore('analyses').delete(id); });
 
 // ---- 小工具 ----
 const $ = id => document.getElementById(id);
@@ -280,6 +309,7 @@ async function openLab(clip) {
   $('lab-demo').hidden = !DEMOS[clip.action];
   $('lab-demo-box').append($('demo'));
   loadDemo(clip.action);
+  showAnalysis(await getAnalysis(clip.id));
   $('home').hidden = true; $('lab').hidden = false;
   scrollTo(0, 0);
 }
@@ -289,6 +319,7 @@ function closeLab() {
   video.removeAttribute('src'); video.load();
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = null; current = null;
+  showAnalysis(null);
   $('demo-home').append($('demo'));
   loadDemo($('action').value);
   $('lab').hidden = true; $('home').hidden = false;
@@ -614,6 +645,393 @@ $('demo-play').onclick = () => {
 };
 $('demo-seek').oninput = e => { pauseDemo(); demoTime = +e.target.value; drawDemo(); };
 $('action').onchange = () => loadDemo($('action').value);
+
+// ---- 骨架分析：MediaPipe 在瀏覽器內逐格辨識，影片不會上傳 ----
+// Holistic：身體 33 點（含 3D 世界座標）＋左右手各 21 點＋臉部 478 點；EfficientDet：籃球位置。
+const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1';
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/';
+const HOLISTIC_MODEL = MODEL_URL + 'holistic_landmarker/holistic_landmarker/float16/1/holistic_landmarker.task';
+const BALL_MODEL = MODEL_URL + 'object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite';
+const ANALYZE_FPS = 30;        // 每秒分析格數
+const MAX_FRAMES = 900;        // 長片自動降低格數，避免分析太久
+const ANALYSIS_VERSION = 2;    // 分析方法改變時加一，方便比較新舊結果
+const MIN_VIS = 0.5;           // 關節可見度低於此值就不計算、不繪畫
+// Pose 33 點索引；[左, 右] 指球員本人的左右
+const PL = { sh: [11, 12], el: [13, 14], wr: [15, 16], hip: [23, 24], kn: [25, 26], an: [27, 28], toe: [31, 32] };
+const POSE_CONN = [[11, 12], [11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19], [12, 14], [14, 16], [16, 18], [16, 20],
+  [16, 22], [18, 20], [11, 23], [12, 24], [23, 24], [23, 25], [24, 26], [25, 27], [26, 28], [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32]];
+const HAND_CONN = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [0, 17], [17, 18], [18, 19], [19, 20]];
+const C_LEFT = '#4fc3f7', C_RIGHT = '#ff8a3d', C_MID = '#ffffff', C_BALL = '#ffd54f';
+const POSE_GROUPS = [[C_LEFT, c => c.every(j => j % 2 === 1)], [C_RIGHT, c => c.every(j => j % 2 === 0)], [C_MID, () => true]]
+  .map(([color, test], g, all) => [color, POSE_CONN.filter(c => test(c) && !all.slice(0, g).some(([, t]) => t(c)))]);
+
+let mp = null, mpClock = 0;   // detectForVideo 的時間戳必須一直遞增，跨影片也一樣
+async function loadModels(status) {
+  if (mp) return mp;
+  status('下載分析程式…');
+  const vision = await import(`${MP_URL}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
+  // 優先用 GPU，不支援時改用 CPU
+  const create = async (Task, opts) => {
+    for (const delegate of ['GPU', 'CPU']) {
+      try { return await Task.createFromOptions(files, { ...opts, runningMode: 'VIDEO', baseOptions: { ...opts.baseOptions, delegate } }); }
+      catch (err) { if (delegate === 'CPU') throw err; }
+    }
+  };
+  status('下載身體、手部及臉部模型（約 14 MB）…');
+  const holistic = await create(vision.HolisticLandmarker, { baseOptions: { modelAssetPath: HOLISTIC_MODEL }, minHandLandmarksConfidence: 0.3 });
+  status('下載籃球偵測模型（約 12 MB）…');
+  const ball = await create(vision.ObjectDetector, {
+    baseOptions: { modelAssetPath: BALL_MODEL }, categoryAllowlist: ['sports ball'], scoreThreshold: 0.2, maxResults: 3
+  });
+  return (mp = { holistic, ball });
+}
+
+// 關節座標壓成 Float32Array 儲存（每點 x, y, z，身體另加可見度）
+function flat(points, k) {
+  if (!points) return null;
+  const a = new Float32Array(points.length * k);
+  points.forEach((p, i) => { a[i * k] = p.x; a[i * k + 1] = p.y; a[i * k + 2] = p.z; if (k === 4) a[i * k + 3] = p.visibility ?? 1; });
+  return a;
+}
+function packFrame(t, h, balls) {
+  return {
+    t, balls,
+    pose: flat(h.poseLandmarks[0], 4), world: flat(h.poseWorldLandmarks[0], 3),
+    lh: flat(h.leftHandLandmarks[0], 3), rh: flat(h.rightHandLandmarks[0], 3), face: flat(h.faceLandmarks[0], 3)
+  };
+}
+
+// 籃球在全畫面只得幾個像素，所以先按身體位置裁出球員附近（頭頂上方留多些位置看球路）再偵測。
+// 回傳裁切範圍（像素）；未辨識到身體時沿用上一格。
+function playerCrop(pose, W, H, last) {
+  if (!pose) return last ?? { x: 0, y: 0, s: Math.min(W, H) };
+  let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
+  for (let i = 0; i < 33; i++) {
+    if (pose[i * 4 + 3] < MIN_VIS) continue;
+    x0 = Math.min(x0, pose[i * 4]); x1 = Math.max(x1, pose[i * 4]);
+    y0 = Math.min(y0, pose[i * 4 + 1]); y1 = Math.max(y1, pose[i * 4 + 1]);
+  }
+  if (x1 <= x0) return last ?? { x: 0, y: 0, s: Math.min(W, H) };
+  const s = Math.min(Math.max((y1 - y0) * H * 2.4, 320), W, H);
+  return {
+    x: Math.min(Math.max((x0 + x1) / 2 * W - s / 2, 0), W - s),
+    y: Math.min(Math.max(y0 * H - s * 0.45, 0), H - s), s
+  };
+}
+
+async function analyzeClip(clip, blob, status) {
+  const { holistic, ball } = await loadModels(status);
+  // 另開一個隱藏的 video 逐格跳轉，不影響畫面上的播放器
+  const v = Object.assign(document.createElement('video'), { muted: true, playsInline: true, preload: 'auto' });
+  v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  const url = URL.createObjectURL(blob);
+  document.body.append(v);
+  try {
+    v.src = url;
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('影片無法讀取')); });
+    const dur = v.duration, fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
+    const W = v.videoWidth, H = v.videoHeight, base = mpClock + 1000, frames = [];
+    const crop = document.createElement('canvas'), cctx2 = crop.getContext('2d');
+    let box = null;
+    for (let i = 0; i < n; i++) {
+      const t = Math.min(i / fps, Math.max(dur - 0.01, 0));
+      if (Math.abs(v.currentTime - t) > 1e-4) await new Promise(r => { v.onseeked = r; v.currentTime = t; });
+      const ts = Math.round(base + t * 1000) + i;
+      const h = holistic.detectForVideo(v, ts);
+      box = playerCrop(flat(h.poseLandmarks[0], 4), W, H, box);
+      crop.width = crop.height = Math.round(box.s);
+      cctx2.drawImage(v, box.x, box.y, box.s, box.s, 0, 0, crop.width, crop.height);
+      const k = box.s / crop.width;
+      const balls = ball.detectForVideo(crop, ts).detections.map(d => {
+        const b = d.boundingBox;
+        return [(box.x + (b.originX + b.width / 2) * k) / W, (box.y + (b.originY + b.height / 2) * k) / H,
+          Math.max(b.width, b.height) * k / 2 / W, d.categories[0].score];
+      });
+      frames.push(packFrame(t, h, balls));
+      if (i % 3 === 0 || i === n - 1) status(`分析中 ${i + 1} / ${n} 格…`);
+    }
+    mpClock = Math.round(base + dur * 1000) + n + 1;
+    return { id: clip.id, version: ANALYSIS_VERSION, fps, w: W, h: H, created: Date.now(), frames };
+  } finally {
+    v.remove();
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ---- 由關節座標計算指標 ----
+const sub = (a, b) => a.map((v, i) => v - b[i]);
+const angleBetween = (u, v) => {
+  const d = u.reduce((s, x, i) => s + x * v[i], 0) / (Math.hypot(...u) * Math.hypot(...v) || 1);
+  return Math.acos(Math.min(1, Math.max(-1, d))) * 180 / Math.PI;
+};
+function metricsOf(f, A) {
+  if (!f.pose || !f.world) return null;
+  const vis = i => f.pose[i * 4 + 3] >= MIN_VIS;
+  const w = i => [f.world[i * 3], f.world[i * 3 + 1], f.world[i * 3 + 2]];
+  const img = (arr, i, k) => [arr[i * k] * A.w, arr[i * k + 1] * A.h];
+  // 三點角度用 3D 世界座標（米），減少拍攝角度造成的誤差
+  const ang = (a, b, c) => vis(a) && vis(b) && vis(c) ? angleBetween(sub(w(a), w(b)), sub(w(c), w(b))) : null;
+  // 手腕屈曲：前臂方向與手掌方向（手腕→中指根部）的夾角，0° 即手腕伸直
+  const wrist = s => {
+    const hand = s ? f.rh : f.lh;
+    if (!hand || !vis(PL.el[s]) || !vis(PL.wr[s])) return null;
+    const e = img(f.pose, PL.el[s], 4), wr = img(f.pose, PL.wr[s], 4);
+    return angleBetween(sub(wr, e), sub(img(hand, 9, 3), img(hand, 0, 3)));
+  };
+  const m = {
+    side: [0, 1].map(s => ({
+      elbow: ang(PL.sh[s], PL.el[s], PL.wr[s]), shoulder: ang(PL.hip[s], PL.sh[s], PL.el[s]),
+      hip: ang(PL.sh[s], PL.hip[s], PL.kn[s]), knee: ang(PL.hip[s], PL.kn[s], PL.an[s]),
+      ankle: ang(PL.kn[s], PL.an[s], PL.toe[s]), wrist: wrist(s)
+    })),
+    lean: null, stance: null, hipY: null,
+    conf: f.pose.filter((_, i) => i % 4 === 3).reduce((s, v) => s + v, 0) / 33
+  };
+  const mid = (a, b) => w(a).map((v, i) => (v + w(b)[i]) / 2);
+  if ([...PL.sh, ...PL.hip].every(vis)) m.lean = angleBetween(sub(mid(11, 12), mid(23, 24)), [0, -1, 0]);
+  if ([...PL.sh, ...PL.an].every(vis)) {
+    const across = (a, b) => { const d = sub(w(a), w(b)); return Math.hypot(d[0], d[2]); };
+    m.stance = across(27, 28) / across(11, 12);
+  }
+  if (PL.hip.every(vis)) m.hipY = (f.pose[23 * 4 + 1] + f.pose[24 * 4 + 1]) / 2;
+  return m;
+}
+
+// 以肩寬（像素）為單位量距離，球員遠近不同也可比較
+const shoulderPx = (A, f) => f.pose ? Math.hypot((f.pose[44] - f.pose[48]) * A.w, (f.pose[45] - f.pose[49]) * A.h) || 50 : 50;
+const handDist = (A, f, c) => f.pose
+  ? Math.min(...[15, 16].map(j => Math.hypot((c[0] - f.pose[j * 4]) * A.w, (c[1] - f.pose[j * 4 + 1]) * A.h))) / shoulderPx(A, f)
+  : Infinity;
+
+// 籃球追蹤：先去掉長時間停在同一位置、又遠離雙手的物件（例如牆上的裝飾），再逐格揀最接近上一格球位（或手）的候選
+function trackBall(A) {
+  const n = A.frames.length, cands = A.frames.map(f => f.balls ?? []);
+  const cell = c => `${Math.round(c[0] * 25)},${Math.round(c[1] * 25)}`, cells = new Map();
+  cands.forEach((cs, i) => cs.forEach(c => {
+    const e = cells.get(cell(c)) ?? { frames: new Set(), far: 0, all: 0 };
+    e.frames.add(i); e.all++;
+    if (handDist(A, A.frames[i], c) > 1.5) e.far++;
+    cells.set(cell(c), e);
+  }));
+  const isStatic = c => { const e = cells.get(cell(c)); return e.frames.size > n * 0.2 && e.far / e.all > 0.7; };
+  const track = [];
+  let prev = null, prevI = -99;
+  for (let i = 0; i < n; i++) {
+    const f = A.frames[i], s = shoulderPx(A, f);
+    let best = null, bestCost = Infinity;
+    for (const c of cands[i]) {
+      if (isStatic(c)) continue;
+      const cost = prev && i - prevI <= 5
+        ? Math.hypot((c[0] - prev[0]) * A.w, (c[1] - prev[1]) * A.h) / s / (i - prevI)
+        : handDist(A, f, c);
+      if (cost < bestCost) { best = c; bestCost = cost; }
+    }
+    if (best && bestCost < 4) { track.push(best); prev = best; prevI = i; } else track.push(null);
+  }
+  return track;
+}
+
+// 關鍵時刻。起跳以「腳踝比前後 0.6 秒內站地位置高出多少」判斷，球員走近或走遠鏡頭也不會誤判。
+function findEvents(A) {
+  const F = A.frames, n = F.length, win = Math.round(A.fps * 0.6), ev = [];
+  const at = (label, i) => { if (i >= 0) ev.push({ label, i }); };
+  const y = (f, j) => f.pose && f.pose[j * 4 + 3] >= MIN_VIS ? f.pose[j * 4 + 1] : null;
+  const ank = F.map(f => { const a = y(f, 27), b = y(f, 28); return a != null && b != null ? (a + b) / 2 : null; });
+  const rise = ank.map((a, i) => {
+    const sh = y(F[i], 11) ?? y(F[i], 12);
+    if (a == null || sh == null || a <= sh) return null;
+    // 地面要前後兩邊都找得到（取兩邊最低點中較高者）：慢慢走遠時不會當成跳起，只有急升急降才算
+    let before = a, after = a;
+    for (let j = Math.max(0, i - win); j < i; j++) if (ank[j] != null) before = Math.max(before, ank[j]);
+    for (let j = i + 1; j <= Math.min(n - 1, i + win); j++) if (ank[j] != null) after = Math.max(after, ank[j]);
+    return (Math.min(before, after) - a) / (a - sh);   // 以肩至腳踝高度為單位
+  });
+  const knee = i => { const s = A.metrics[i]?.side; return s && s[0].knee != null && s[1].knee != null ? (s[0].knee + s[1].knee) / 2 : null; };
+  const argBest = (from, to, val, better) => {
+    let best = -1;
+    for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) { const v = val(i); if (v != null && (best < 0 || better(v, val(best)))) best = i; }
+    return best;
+  };
+  const apex = argBest(0, n - 1, i => rise[i], (a, b) => a > b);
+  if (apex < 0 || rise[apex] < 0.06) {
+    at('膝蓋最彎', argBest(0, n - 1, knee, (a, b) => a < b));
+    return ev;
+  }
+  // 離地與落地：腳踝高出地面不足最高點的兩成即視為著地（避免把起跳前的小碎步當成跳起）
+  const air = Math.max(0.02, rise[apex] * 0.2);
+  let take = apex, land = apex;
+  while (take > 0 && (rise[take - 1] ?? 0) > air) take--;
+  while (land < n - 1 && (rise[land + 1] ?? 0) > air) land++;
+  take = Math.max(take - 1, 0); land = Math.min(land + 1, n - 1);
+  at('蓄力最低', argBest(take - Math.round(A.fps * 1.2), take, knee, (a, b) => a < b));
+  at('起跳', take); at('最高點', apex); at('落地', land);
+  // 出手：出手一刻球常被手遮住，所以取騰空期間「球首次在頭頂上方、離手超過一個肩寬」的一格
+  for (let i = take; i <= land; i++) {
+    const b = A.track[i], f = F[i];
+    if (b && f.pose && handDist(A, f, b) > 1 && b[1] < f.pose[1]) { at('出手', i); return ev.sort((a, b2) => a.i - b2.i); }
+  }
+  // 看不到球時：以起跳至最高點後一刻之間，投籃手（最高點時較高那隻）手肘最伸直的一格估算
+  const side = (y(F[apex], 16) ?? 1) < (y(F[apex], 15) ?? 1) ? 1 : 0;
+  at('出手（估算）', argBest(take, Math.min(land, apex + Math.round(A.fps * 0.25)), i => A.metrics[i]?.side[side].elbow, (a, b) => a > b));
+  return ev.sort((a, b) => a.i - b.i);
+}
+
+// ---- 顯示 ----
+let analysis = null, analyzing = false;
+const ANA_HINT = $('ana-status').textContent;
+const layers = { pose: true, hands: true, face: true, ball: true };
+$('ana-layers').append(...Object.entries({ pose: '身體', hands: '手部', face: '臉部', ball: '籃球' }).map(([k, name]) =>
+  el('button', { textContent: name, className: 'on', onclick: e => { layers[k] = !layers[k]; e.target.classList.toggle('on', layers[k]); drawOverlay(); } })));
+$('ana-legend').textContent = '實線：膝蓋角度　虛線：手肘角度　橙色：右　藍色：左。點擊圖表可跳到該時間。';
+
+function showAnalysis(A) {
+  analysis = A;
+  $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A;
+  if (!A) { $('ana-status').textContent = ANA_HINT; drawOverlay(); return; }
+  A.metrics ??= A.frames.map(f => metricsOf(f, A));
+  A.track ??= trackBall(A);
+  A.events ??= findEvents(A);
+  const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
+  const body = pct('pose');
+  $('ana-status').textContent = `已分析 ${A.frames.length} 格（每秒 ${Math.round(A.fps)} 格）。辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、籃球 ${pct('ball')}%。`
+    + (body < 50 ? '大部分畫面未能辨識身體，請全身入鏡、光線充足後重拍。' : '')
+    + ((A.version ?? 1) < ANALYSIS_VERSION ? '這是舊版分析，清除後重新分析可得到更準確的結果。' : '');
+  $('ana-events').replaceChildren(...(A.events.length ? A.events.map(e => el('button', {
+    textContent: `${e.label} ${fmt(A.frames[e.i].t)} 秒`, onclick: () => { video.pause(); video.currentTime = A.frames[e.i].t; }
+  })) : [el('span', { className: 'meta', textContent: '未偵測到關鍵時刻。' })]));
+  drawOverlay();
+}
+
+$('ana-run').onclick = async () => {
+  if (analyzing) return;
+  const clip = current, status = s => { if (current === clip) $('ana-status').textContent = s; };
+  analyzing = true; $('ana-run').disabled = true; video.pause();
+  try {
+    const A = await analyzeClip(clip, await getVideo(clip.id), status);
+    await putAnalysis(A);
+    if (current === clip) showAnalysis(A);
+  } catch (err) {
+    console.error(err);
+    status(`分析失敗：${err?.message || err}。請檢查網絡連線後再試。`);
+  } finally {
+    analyzing = false; $('ana-run').disabled = false;
+  }
+};
+$('ana-clear').onclick = async () => {
+  if (!confirm('清除這段影片的骨架分析？')) return;
+  await deleteAnalysis(current.id);
+  showAnalysis(null);
+};
+
+const overlay = $('overlay'), octx = overlay.getContext('2d');
+const frameIndex = t => Math.min(Math.max(Math.round(t * analysis.fps), 0), analysis.frames.length - 1);
+function fitCanvas(c, ctx) {
+  const dpr = devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  return [W, H];
+}
+
+function drawOverlay() {
+  const [W, H] = fitCanvas(overlay, octx);
+  if (!analysis || !video.videoWidth) return;
+  // 影片以 object-fit: contain 顯示，先計出畫面實際所在範圍
+  const s = Math.min(W / video.videoWidth, H / video.videoHeight), cw = video.videoWidth * s, ch = video.videoHeight * s;
+  const ox = (W - cw) / 2, oy = (H - ch) / 2, i = frameIndex(video.currentTime), f = analysis.frames[i];
+  const xy = (arr, j, k) => [ox + arr[j * k] * cw, oy + arr[j * k + 1] * ch];
+  const lines = (arr, k, conn, color, width, ok = () => true) => {
+    octx.strokeStyle = color; octx.lineWidth = width; octx.beginPath();
+    for (const [a, b] of conn) if (ok(a) && ok(b)) { octx.moveTo(...xy(arr, a, k)); octx.lineTo(...xy(arr, b, k)); }
+    octx.stroke();
+  };
+  const joints = (arr, k, color, r, ok = () => true) => {
+    octx.fillStyle = color;
+    for (let j = 0; j < arr.length / k; j++) if (ok(j)) { octx.beginPath(); octx.arc(...xy(arr, j, k), r, 0, 7); octx.fill(); }
+  };
+  octx.lineCap = 'round'; octx.shadowColor = 'rgba(0,0,0,.7)'; octx.shadowBlur = 3;
+  if (layers.face && f.face) {
+    octx.fillStyle = 'rgba(255,255,255,.6)';
+    for (let j = 0; j < f.face.length / 3; j++) { const [x, y] = xy(f.face, j, 3); octx.fillRect(x - 0.6, y - 0.6, 1.2, 1.2); }
+  }
+  if (layers.pose && f.pose) {
+    const ok = j => j > 10 && f.pose[j * 4 + 3] >= MIN_VIS;
+    for (const [color, conn] of POSE_GROUPS) lines(f.pose, 4, conn, color, 3, ok);
+    joints(f.pose, 4, C_MID, 3, ok);
+  }
+  if (layers.hands) for (const [hand, color] of [[f.lh, C_LEFT], [f.rh, C_RIGHT]]) {
+    if (!hand) continue;
+    lines(hand, 3, HAND_CONN, color, 1.5);
+    joints(hand, 3, C_MID, 1.5);
+  }
+  if (layers.ball) {
+    // 球路：最近一秒的位置
+    const trail = analysis.track.slice(Math.max(0, i - Math.round(analysis.fps)), i + 1).filter(Boolean), b = analysis.track[i];
+    octx.strokeStyle = C_BALL; octx.lineWidth = 2; octx.beginPath();
+    trail.forEach((g, n) => octx[n ? 'lineTo' : 'moveTo'](...xy(g, 0, 4)));
+    octx.stroke();
+    if (b) { octx.lineWidth = 2.5; octx.beginPath(); octx.arc(...xy(b, 0, 4), b[2] * cw, 0, 7); octx.stroke(); }
+  }
+  octx.shadowBlur = 0;
+  updateMetrics(i);
+  drawChart(i);
+}
+
+const ROWS = [['elbow', '手肘角度'], ['shoulder', '肩部角度'], ['hip', '髖部角度'], ['knee', '膝蓋角度'], ['ankle', '腳踝角度'], ['wrist', '手腕屈曲']];
+function updateMetrics(i) {
+  const m = analysis.metrics[i], deg = v => v == null ? '—' : `${Math.round(v)}°`;
+  const one = (name, value) => el('tr', {}, [el('td', { textContent: name }), el('td', { textContent: value, colSpan: 2 })]);
+  const rows = [el('tr', {}, [el('th', { textContent: `第 ${i + 1} 格・${fmt(analysis.frames[i].t)} 秒` }), el('th', { textContent: '左' }), el('th', { textContent: '右' })])];
+  if (!m) rows.push(el('tr', {}, [el('td', { textContent: '這一格未能辨識身體', colSpan: 3 })]));
+  else rows.push(
+    ...ROWS.map(([k, name]) => el('tr', {}, [el('td', { textContent: name }), el('td', { textContent: deg(m.side[0][k]) }), el('td', { textContent: deg(m.side[1][k]) })])),
+    one('軀幹前傾', deg(m.lean)), one('站距 ÷ 肩寬', m.stance == null ? '—' : m.stance.toFixed(2)), one('身體辨識信心', `${Math.round(m.conf * 100)}%`));
+  $('ana-table').replaceChildren(...rows);
+}
+
+const SERIES = [['knee', 1, C_RIGHT, []], ['knee', 0, C_LEFT, []], ['elbow', 1, C_RIGHT, [5, 4]], ['elbow', 0, C_LEFT, [5, 4]]];
+const chart = $('ana-chart'), cctx = chart.getContext('2d');
+function drawChart(cur) {
+  const [W, H] = fitCanvas(chart, cctx), n = analysis.frames.length, css = getComputedStyle(document.body);
+  const X = i => n > 1 ? i / (n - 1) * W : 0, Y = deg => H - 4 - deg / 180 * (H - 8);
+  cctx.strokeStyle = css.getPropertyValue('--line'); cctx.lineWidth = 1; cctx.setLineDash([]);
+  cctx.beginPath();
+  for (const g of [0, 90, 180]) { cctx.moveTo(0, Y(g)); cctx.lineTo(W, Y(g)); }
+  cctx.stroke();
+  cctx.fillStyle = css.getPropertyValue('--muted'); cctx.font = '10px system-ui';
+  cctx.fillText('180°', 2, Y(180) + 10); cctx.fillText('90°', 2, Y(90) - 2);
+  for (const [key, s, color, dash] of SERIES) {
+    cctx.strokeStyle = color; cctx.lineWidth = 1.5; cctx.setLineDash(dash); cctx.beginPath();
+    let pen = false;
+    analysis.metrics.forEach((m, i) => {
+      const v = m?.side[s][key];
+      if (v == null) { pen = false; return; }
+      cctx[pen ? 'lineTo' : 'moveTo'](X(i), Y(v)); pen = true;
+    });
+    cctx.stroke();
+  }
+  cctx.setLineDash([]);
+  cctx.fillStyle = css.getPropertyValue('--muted');
+  for (const e of analysis.events) cctx.fillRect(X(e.i) - 1, 0, 2, 6);
+  cctx.strokeStyle = css.getPropertyValue('--text'); cctx.lineWidth = 1.5;
+  cctx.beginPath(); cctx.moveTo(X(cur), 0); cctx.lineTo(X(cur), H); cctx.stroke();
+}
+chart.onclick = e => {
+  if (!analysis) return;
+  const r = chart.getBoundingClientRect(), n = analysis.frames.length;
+  video.pause();
+  video.currentTime = analysis.frames[Math.round((e.clientX - r.left) / r.width * (n - 1))].t;
+};
+
+// 影片每出一格就重畫骨架（不支援 requestVideoFrameCallback 的瀏覽器改用 timeupdate）
+for (const ev of ['seeked', 'timeupdate', 'loadeddata']) video.addEventListener(ev, drawOverlay);
+addEventListener('resize', drawOverlay);
+if (video.requestVideoFrameCallback) {
+  const onFrame = () => { drawOverlay(); video.requestVideoFrameCallback(onFrame); };
+  video.requestVideoFrameCallback(onFrame);
+}
 
 loadDemo($('action').value);
 renderHome();
