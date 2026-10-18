@@ -59,6 +59,10 @@
   .demo svg .far { stroke: var(--muted); opacity: .6; }
   .demo svg .head { fill: var(--card); stroke: var(--text); stroke-width: 3; }
   .demo svg .ball { fill: var(--accent); }
+  .demo svg .face { stroke-width: 2.5; }
+  .demo svg .near, .demo svg .far { stroke-width: 3.5; }
+  .demo svg .dot { display: none; fill: var(--accent); stroke: var(--card); stroke-width: .6; }
+  .demo svg.dots .dot { display: inline; }
   .demo svg .court { stroke: var(--line); stroke-width: 2; fill: none; }
   .demo svg .rim { stroke: var(--accent); stroke-width: 3; }
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
@@ -92,6 +96,7 @@
           <div class="row">
             <button class="primary" id="demo-play">播放示範</button>
             <span class="row" id="demo-speeds"></span>
+            <button id="demo-dots">關節點</button>
           </div>
           <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
           <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
@@ -354,7 +359,10 @@ function renderMarks() {
 // 「前」指靠近鏡頭、深色那一邊（右手持球）；air = 離地高度。
 // hand = [前手腕, 後手腕] 相對前臂的屈曲：正數 = 手腕向後翻（托球），負數 = 向前下壓（出手）。
 // 腰、頸、腳掌的角度由軀幹前傾及離地高度自動推算，不用逐格寫。
-const BODY = { trunk: 38, neck: 13, upper: 19, fore: 18, hand: 7, thigh: 27, shin: 26, foot: 8 };
+const BODY = {
+  trunk: 38, neck: 5, skull: 8, upper: 19, fore: 18, palm: 4, finger: 4, thumb: 3.5,
+  thigh: 27, shin: 26, ankle: 4, heel: 3, sole: 7, toe: 3
+};
 const GROUND = 185, BALL_R = 6;
 const P = (x, t, arms, legs, air = 0, hand = [0, 0]) => ({ x, t, arms, legs, air, hand });
 const RUN_A = [30, 0, -25, -50], RUN_B = [-25, -50, 30, 0];
@@ -436,31 +444,47 @@ for (const d of Object.values(DEMOS)) {
 }
 const fromVec = v => P(v[0], v[1], v.slice(3, 7), v.slice(7, 11), v[2], v.slice(11, 13));
 
-// 由角度計出各關節座標（正向運動學），再把最低的腳放回地面
-function solve(pose, front) {
-  const go = (p, deg, len) => { const r = deg * Math.PI / 180; return [p[0] + Math.sin(r) * len, p[1] + Math.cos(r) * len]; };
+// 由角度計出各關節座標（正向運動學），再把最低的腳放回地面。
+// 共 31 個點，排法對應 MediaPipe Pose 的 33 點，日後可把用戶骨架直接疊在示範上比較。
+// look = 視線目標（例如籃框），只用於側面視角。
+const go = (p, deg, len) => { const r = deg * Math.PI / 180; return [p[0] + Math.sin(r) * len, p[1] + Math.cos(r) * len]; };
+const clamp01 = v => Math.min(Math.max(v, 0), 1);
+function solve(pose, front, look) {
   const sw = front ? 10 : 0, hw = front ? 7 : 0, t = pose.t;
   const [uN, fN, uF, fF] = pose.arms, [tN, sN, tF, sF] = pose.legs, [xN, xF] = pose.hand;
   const j = { p: [0, 0], hN: [hw, 0], hF: [-hw, 0] };
-  j.m = go(j.p, 180 - t * 0.6, BODY.trunk / 2);   // 腰：上背比下背前傾多，背部呈弧線
-  j.n = go(j.m, 180 - t * 1.4, BODY.trunk / 2);
-  j.h = go(j.n, 180 - t * 0.4, BODY.neck);        // 頭比軀幹直，視線向前
+  // 脊椎三節：愈上愈前傾，背部呈弧線；頸和頭較直，保持抬頭
+  j.m = go(j.p, 180 - t * 0.4, BODY.trunk / 3);
+  j.c = go(j.m, 180 - t * 1.0, BODY.trunk / 3);
+  j.n = go(j.c, 180 - t * 1.6, BODY.trunk / 3);
+  j.nk = go(j.n, 180 - t * 0.8, BODY.neck);
+  j.h = go(j.nk, 180 - t * 0.3, BODY.skull);
   j.sN = [j.n[0] + sw, j.n[1]]; j.sF = [j.n[0] - sw, j.n[1]];
   j.eN = go(j.sN, uN, BODY.upper); j.wN = go(j.eN, fN, BODY.fore);
   j.eF = go(j.sF, uF, BODY.upper); j.wF = go(j.eF, fF, BODY.fore);
-  j.qN = go(j.wN, fN + xN, BODY.hand); j.qF = go(j.wF, fF + xF, BODY.hand);
   j.bN = go(j.wN, fN, BALL_R + 1); j.bF = go(j.wF, fF, BALL_R + 1);
+  // 手：手掌（g）→ 微曲的手指（q），另加拇指（u）
+  const hand = (w, a) => { const g = go(w, a, BODY.palm); return [g, go(g, a + 20, BODY.finger), go(w, a - 40, BODY.thumb)]; };
+  [j.gN, j.qN, j.uN] = hand(j.wN, fN + xN);
+  [j.gF, j.qF, j.uF] = hand(j.wF, fF + xF);
   j.kN = go(j.hN, tN, BODY.thigh); j.aN = go(j.kN, sN, BODY.shin);
   j.kF = go(j.hF, tF, BODY.thigh); j.aF = go(j.kF, sF, BODY.shin);
-  const dy = GROUND - pose.air - Math.max(j.aN[1], j.aF[1]);
+  const dy = GROUND - pose.air - BODY.ankle - Math.max(j.aN[1], j.aF[1]);
   for (const k in j) j[k] = [j[k][0] + pose.x, j[k][1] + dy];
-  // 腳掌：貼地時平放，離地愈高腳尖愈向下
+  // 腳：腳跟（l）、前腳掌（o）、腳趾（t）。貼地時平放，離地愈高腳尖愈向下；前腳掌著地時腳趾保持平貼
   const foot = (a, side) => {
-    if (front) return [a[0] + side * 5, a[1]];
-    const lift = Math.min(Math.max((GROUND - a[1]) / 14, 0), 1);
-    return go(a, 90 - 55 * lift, BODY.foot);
+    const base = [a[0], a[1] + BODY.ankle];
+    if (front) return [base, [a[0] + side * 5, base[1]], [a[0] + side * 7, base[1]]];
+    const f = 90 - 55 * clamp01((GROUND - base[1]) / 14), under = go(a, f - 90, BODY.ankle), ball = go(under, f, BODY.sole);
+    return [go(under, f + 180, BODY.heel), ball, go(ball, ball[1] > GROUND - 1.5 ? 90 : f, BODY.toe)];
   };
-  j.tN = foot(j.aN, 1); j.tF = foot(j.aF, -1);
+  [j.lN, j.oN, j.tN] = foot(j.aN, 1);
+  [j.lF, j.oF, j.tF] = foot(j.aF, -1);
+  // 鼻尖顯示頭部朝向：有籃框時望向籃框，否則望向前方
+  if (!front) {
+    const ang = look ? Math.min(150, Math.max(60, Math.atan2(look[0] - j.h[0], look[1] - j.h[1]) * 180 / Math.PI)) : 95;
+    j.ns = go(j.h, ang, 8); j.nose = go(j.h, ang, 11);
+  }
   return j;
 }
 
@@ -504,11 +528,16 @@ const hoop = [
   svgEl('line', { class: 'rim', x1: 200, y1: 45, x2: 226, y2: 45 })
 ];
 const fig = {
-  farArm: svgEl('polyline', { class: 'far' }), farLeg: svgEl('polyline', { class: 'far' }),
+  farArm: svgEl('path', { class: 'far' }), farLeg: svgEl('path', { class: 'far' }),
   body: svgEl('path', { class: 'body' }), head: svgEl('circle', { class: 'head', r: 8 }),
-  nearLeg: svgEl('polyline', { class: 'near' }), nearArm: svgEl('polyline', { class: 'near' }),
+  nose: svgEl('path', { class: 'body face' }),
+  nearLeg: svgEl('path', { class: 'near' }), nearArm: svgEl('path', { class: 'near' }),
   ball: svgEl('circle', { class: 'ball', r: BALL_R })
 };
+// 關節點（可切換顯示）
+const DOTS = ['p', 'm', 'c', 'n', 'nk', 'h', ...['s', 'e', 'w', 'g', 'q', 'u', 'h', 'k', 'a', 'l', 'o', 't'].flatMap(s => [s + 'N', s + 'F'])];
+const dots = DOTS.map(() => svgEl('circle', { class: 'dot', r: 1.8 }));
+$('demo-dots').onclick = () => $('demo-dots').classList.toggle('on', $('demo-svg').classList.toggle('dots'));
 
 let demo = null, demoTime = 0, demoPlaying = false, demoSpeed = 0.5, demoLast = 0;
 const markDemoSpeed = speedButtons($('demo-speeds'), s => { demoSpeed = s; markDemoSpeed(s); });
@@ -518,14 +547,17 @@ function drawDemo() {
   const d = demo;
   const [i, k, u] = seg(d.keys, demoTime);
   const T = d.keys.map(key => key.t);
-  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front);
-  const pts = (...names) => names.map(n => j[n].map(v => v.toFixed(1)).join(',')).join(' ');
-  fig.farArm.setAttribute('points', pts('sF', 'eF', 'wF', 'qF'));
-  fig.farLeg.setAttribute('points', pts('hF', 'kF', 'aF', 'tF'));
-  fig.nearArm.setAttribute('points', pts('sN', 'eN', 'wN', 'qN'));
-  fig.nearLeg.setAttribute('points', pts('hN', 'kN', 'aN', 'tN'));
-  fig.body.setAttribute('d', `M${pts('hF')} L${pts('hN')} M${pts('p')} L${pts('m')} L${pts('n')} M${pts('sF')} L${pts('sN')} M${pts('n')} L${pts('h')}`);
+  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front, d.hoop && [213, 45]);
+  const pt = n => j[n].map(v => v.toFixed(1)).join(',');
+  const line = (...names) => 'M' + names.map(pt).join(' L');
+  const arm = s => `${line('s' + s, 'e' + s, 'w' + s, 'g' + s, 'q' + s)} ${line('w' + s, 'u' + s)}`;
+  const leg = s => `${line('h' + s, 'k' + s, 'a' + s, 'l' + s, 'o' + s, 't' + s)} ${line('a' + s, 'o' + s)}`;
+  fig.farArm.setAttribute('d', arm('F')); fig.farLeg.setAttribute('d', leg('F'));
+  fig.nearArm.setAttribute('d', arm('N')); fig.nearLeg.setAttribute('d', leg('N'));
+  fig.body.setAttribute('d', `${line('hF', 'hN')} ${line('p', 'm', 'c', 'n', 'nk', 'h')} ${line('sF', 'sN')}`);
   fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
+  fig.nose.setAttribute('d', j.nose ? line('ns', 'nose') : '');
+  DOTS.forEach((n, x) => { dots[x].setAttribute('cx', j[n][0]); dots[x].setAttribute('cy', j[n][1]); });
   fig.ball.style.display = d.ball.length ? '' : 'none';
   if (d.ball.length) {
     const [bi, bk, bu] = seg(d.ball, demoTime);
