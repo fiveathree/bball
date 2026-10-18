@@ -75,6 +75,8 @@
   .compare.solo { grid-template-columns: 1fr; }
   .compare.solo #cmp-demo { display: none; }
   #cmp-demo svg { margin: 0; max-height: 60vh; }
+  .seg { gap: 4px; flex-wrap: nowrap; }
+  .seg button { flex: 1; padding: 4px 2px; min-height: 32px; font-size: 12px; white-space: nowrap; }
   #cmp-demo .demo-phase { font-size: 13px; min-height: 0; }
   #cmp-demo .demo-phase span { display: block; color: var(--muted); font-size: 12px; }
   .stage { position: relative; }
@@ -115,6 +117,7 @@
         <canvas id="overlay"></canvas>
       </div>
       <div class="demo" id="cmp-demo">
+        <div class="row seg" id="right-mode"><button data-mode="mimic">你的動作</button><button data-mode="demo">標準示範</button></div>
         <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
         <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
       </div>
@@ -348,6 +351,7 @@ async function openLab(clip) {
   $('note').value = '';
   renderMarks();
   loadDemo(clip.action);
+  rightMode = 'mimic';   // 有分析就預設顯示「你的動作」
   showAnalysis(clip.sample ? await sampleAnalysis() : await getAnalysis(clip.id));
   renderList();
 }
@@ -599,11 +603,8 @@ let demo = null, demoTime = 0, demoPlaying = false, demoSpeed = 0.5, demoLast = 
 const markDemoSpeed = speedButtons($('demo-speeds'), s => { demoSpeed = s; markDemoSpeed(s); });
 markDemoSpeed(demoSpeed);
 
-function drawDemo() {
-  const d = demo;
-  const [i, k, u] = seg(d.keys, demoTime);
-  const T = d.keys.map(key => key.t);
-  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front, d.hoop && [213, 45]);
+// 畫火柴人：j = 各關節座標（名稱同 solve() 輸出），ball = 球心或 null。示範動畫及複製真人動作共用。
+function drawFigure(j, ball) {
   const pt = n => j[n].map(v => v.toFixed(1)).join(',');
   const line = (...names) => 'M' + names.map(pt).join(' L');
   const arm = s => `${line('s' + s, 'e' + s, 'w' + s, 'g' + s, 'q' + s)} ${line('w' + s, 'u' + s)}`;
@@ -614,11 +615,19 @@ function drawDemo() {
   fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
   fig.nose.setAttribute('d', j.nose ? line('ns', 'nose') : '');
   DOTS.forEach((n, x) => { dots[x].setAttribute('cx', j[n][0]); dots[x].setAttribute('cy', j[n][1]); });
-  fig.ball.style.display = d.ball.length ? '' : 'none';
+  fig.ball.style.display = ball ? '' : 'none';
+  if (ball) { fig.ball.setAttribute('cx', ball[0]); fig.ball.setAttribute('cy', ball[1]); }
+}
+
+function drawDemo() {
+  const d = demo;
+  const [i, k, u] = seg(d.keys, demoTime);
+  const T = d.keys.map(key => key.t);
+  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front, d.hoop && [213, 45]);
+  let pos = null;
   if (d.ball.length) {
     const [bi, bk, bu] = seg(d.ball, demoTime);
     const A = d.ball[bi].at, B = d.ball[bk].at;
-    let pos;
     if (bi === bk || (typeof A === 'string' && A === B)) pos = ballAt(A, j);   // 一直在手上
     else {
       // 球的路線同樣用平滑曲線；觸地那一格保持直線進出，反彈才夠利落
@@ -629,8 +638,8 @@ function drawDemo() {
         return hermite(BT, V, bi, bu, floor(bi) ? slope : tangent(BT, V, bi), floor(bk) ? slope : tangent(BT, V, bk));
       });
     }
-    fig.ball.setAttribute('cx', pos[0]); fig.ball.setAttribute('cy', pos[1]);
   }
+  drawFigure(j, pos);
   // 目前階段 = 時間上最近的一個有 label 的 key
   const phase = d.keys.filter(k => k.label && k.t <= demoTime + 1e-6).at(-1) ?? d.keys[0];
   $('demo-label').textContent = phase.label;
@@ -645,7 +654,7 @@ function loadDemo(action) {
   $('compare').classList.toggle('solo', !demo);   // 「其他」沒有示範，影片佔全寬
   $('lab-demo').hidden = !demo;
   if (!demo) return;
-  for (const n of hoop) n.style.display = demo.hoop ? '' : 'none';
+  applyRightVisuals();
   $('demo-seek').max = demo.end;
   $('demo-phases').replaceChildren(...demo.keys.filter(k => k.label).map(k => el('button', {
     textContent: k.label, dataset: { t: k.t }, onclick: () => { pauseDemo(); demoTime = k.t; drawDemo(); }
@@ -937,6 +946,7 @@ function showAnalysis(A) {
   A.track ??= trackBall(A);
   A.events ??= findEvents(A);
   A.view ??= cameraView(A);
+  A.mimic ??= buildMimic(A);
   buildSync();
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
@@ -990,6 +1000,7 @@ function drawOverlay() {
   const ox = (W - cw) / 2, oy = (H - ch) / 2, i = frameIndex(video.currentTime), f = analysis.frames[i];
   if (video.currentTime > analysis.frames.at(-1).t + 1 / analysis.fps) {   // 超出已分析範圍
     $('ana-table').replaceChildren(el('tr', {}, [el('td', { textContent: '這段時間未有分析', colSpan: 3 })]));
+    updateRight();
     return;
   }
   const xy = (arr, j, k) => [ox + arr[j * k] * cw, oy + arr[j * k + 1] * ch];
@@ -1028,7 +1039,7 @@ function drawOverlay() {
   octx.shadowBlur = 0;
   updateMetrics(i);
   drawChart(i);
-  syncDemo();
+  updateRight();
 }
 
 const ROWS = [['elbow', '手肘角度'], ['shoulder', '肩部角度'], ['hip', '髖部角度'], ['knee', '膝蓋角度'], ['ankle', '腳踝角度'], ['wrist', '手腕屈曲']];
@@ -1095,8 +1106,7 @@ const EVENT_PHASE = {
 let syncAnchors = null, demoManual = false;
 function buildSync() {
   syncAnchors = null;
-  // 球員向左時把火柴人左右反轉，兩邊同一方向才好對照（只在影片頁，離開時還原）
-  $('demo-svg').style.transform = analysis?.view?.side && analysis.view.facing < 0 ? 'scaleX(-1)' : '';
+  applyRightVisuals();
   const map = current && EVENT_PHASE[current.action], d = current && DEMOS[current.action];
   let hint = '分析影片後，火柴人會跟住你的動作節奏同步。';
   if (analysis && map && d) {
@@ -1122,8 +1132,147 @@ function syncDemo() {
   demoTime = a[k].d + (a[k + 1].d - a[k].d) * u;
   drawDemo();
 }
-// 自行操作示範時暫停同步；影片再播放或跳轉就恢復
-for (const id of ['demo-play', 'demo-seek', 'demo-phases']) $(id).addEventListener('pointerdown', () => { demoManual = true; });
+// 自行操作示範時暫停同步並切換到「標準示範」；影片再播放或跳轉就恢復同步
+for (const id of ['demo-play', 'demo-seek', 'demo-phases']) $(id).addEventListener('pointerdown', () => { demoManual = true; setRightMode('demo'); });
+
+// ---- 右邊火柴人複製真人動作（「你的動作」）----
+// 用分析得到的關節座標逐格驅動火柴人：每個座標的時間序列先補洞、平滑，播放時在格與格之間用三次曲線補間，
+// 並以螢幕更新率重畫，所以慢鏡也流暢。座標按全片固定比例換算，保留球員的移動和跳躍高度，也保留原本方向。
+const MIMIC_VIS = 0.3;        // 低於此可見度的點視為缺漏，由前後格補上
+const MIMIC_SMOOTH = 1;       // 高斯平滑的標準差（格）；太大會抹走快速動作
+const MIMIC_HEIGHT = 108;     // 地面至頭部中心的高度（SVG 單位，與示範火柴人一致）
+let rightMode = 'mimic';      // 'mimic' = 你的動作；'demo' = 標準示範
+
+// 把有缺漏的時間序列補齊（線性補間，頭尾沿用最近值），再做高斯平滑
+function fillSmooth(v, sigma) {
+  const n = v.length, idx = v.flatMap((x, i) => x == null ? [] : [i]);
+  if (!idx.length) return null;
+  const f = v.map((x, i) => {
+    if (x != null) return x;
+    const b = idx.findLast(k => k < i), a = idx.find(k => k > i);
+    return b == null ? v[a] : a == null ? v[b] : v[b] + (v[a] - v[b]) * (i - b) / (a - b);
+  });
+  if (!sigma) return f;
+  const r = Math.ceil(sigma * 3), w = Array.from({ length: 2 * r + 1 }, (_, k) => Math.exp(-((k - r) ** 2) / (2 * sigma * sigma)));
+  return f.map((_, i) => {
+    let s = 0, ws = 0;
+    for (let k = -r; k <= r; k++) { const j = i + k; if (j >= 0 && j < n) { s += f[j] * w[k + r]; ws += w[k + r]; } }
+    return s / ws;
+  });
+}
+
+function buildMimic(A) {
+  const F = A.frames, n = F.length;
+  const px = (f, i) => f.pose && f.pose[i * 4 + 3] >= MIMIC_VIS ? [f.pose[i * 4] * A.w, f.pose[i * 4 + 1] * A.h] : null;
+  // 靠近鏡頭的一邊畫深色：全片比較左右肩、髖的深度（z 越小越近），整段固定，避免閃來閃去
+  let zl = 0, zr = 0;
+  for (const f of F) if (f.pose) { zl += f.pose[11 * 4 + 2] + f.pose[23 * 4 + 2]; zr += f.pose[12 * 4 + 2] + f.pose[24 * 4 + 2]; }
+  const side = zl <= zr ? { N: 0, F: 1 } : { N: 1, F: 0 };
+  // 需要的點：MediaPipe 索引 [左, 右]；手用身體模型的手部點（每格都有，比手部模型穩定）
+  const PAIRS = { s: [11, 12], e: [13, 14], w: [15, 16], h: [23, 24], k: [25, 26], a: [27, 28], l: [29, 30], o: [31, 32], pk: [17, 18], ix: [19, 20], u: [21, 22] };
+  const raw = {};
+  for (const [name, lr] of Object.entries(PAIRS)) for (const S of ['N', 'F']) raw[name + S] = F.map(f => px(f, lr[side[S]]));
+  raw.nose = F.map(f => px(f, 0));
+  raw.ear = F.map(f => { const e = [px(f, 7), px(f, 8)].filter(Boolean); return e.length ? [0, 1].map(c => e.reduce((s, p) => s + p[c], 0) / e.length) : null; });
+  const track = {};
+  for (const [name, pts] of Object.entries(raw)) {
+    const xs = fillSmooth(pts.map(p => p?.[0]), MIMIC_SMOOTH), ys = fillSmooth(pts.map(p => p?.[1]), MIMIC_SMOOTH);
+    if (xs) track[name] = xs.map((x, i) => [x, ys[i]]);
+  }
+  if (!track.sN || !track.hN || !track.aN) return null;
+  track.ear ??= track.nose ?? track.sN.map(([x, y]) => [x, y - 30]);
+  track.nose ??= track.ear;
+  for (const S of ['N', 'F']) { track['l' + S] ??= track['a' + S]; track['o' + S] ??= track['a' + S]; track['pk' + S] ??= track['w' + S]; track['ix' + S] ??= track['w' + S]; track['u' + S] ??= track['w' + S]; }
+  // 籃球：只補 6 格以內的缺口，太長的缺口代表真的看不到
+  const ball = A.track.map(b => b && [b[0] * A.w, b[1] * A.h]);
+  for (let i = 0; i < n; i++) if (!ball[i]) {
+    const b = ball.findLastIndex((p, k) => k < i && p), a = ball.findIndex((p, k) => k > i && p);
+    if (b >= 0 && a >= 0 && a - b <= 6) ball[i] = [0, 1].map(c => ball[b][c] + (ball[a][c] - ball[b][c]) * (i - b) / (a - b));
+  }
+  // 換算到 SVG。鏡頭可能跟拍、推近，所以地面、比例、水平位置都逐格估算，只去掉慢變化（鏡頭），保留快動作（跳躍、踏步）：
+  // - 比例：肩→髖→膝→踝的骨長總和，彎腰屈膝也不變；
+  // - 地面：前後 0.6 秒內兩邊都找得到的腳底位置（跳起時地面不會跟住升高）；
+  // - 水平：前後 0.6 秒臀部位置的中位數置中。
+  const median = a => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+  const win = Math.round(A.fps * 0.6), slow = A.fps * 0.25, len = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const foot = track.aN.map((_, i) => Math.max(...['aN', 'aF', 'lN', 'lF', 'oN', 'oF'].map(k => track[k][i][1])));
+  const bone = track.aN.map((_, i) => len(track.sN[i], track.hN[i]) + len(track.hN[i], track.kN[i]) + len(track.kN[i], track.aN[i]));
+  const ref = median(foot.map((y, i) => y - track.ear[i][1])) / median(bone);   // 站立時頭至腳 ÷ 骨長
+  const range = (i, from, to) => foot.slice(Math.max(0, from), Math.min(n, to + 1));
+  const ground = fillSmooth(foot.map((_, i) => Math.min(Math.max(...range(i, i - win, i)), Math.max(...range(i, i, i + win)))), slow);
+  const scale = fillSmooth(bone.map(b => MIMIC_HEIGHT / (b * ref)), slow);
+  const hipX = track.hN.map((p, i) => (p[0] + track.hF[i][0]) / 2);
+  const cx = fillSmooth(hipX.map((_, i) => median(hipX.slice(Math.max(0, i - win), i + win + 1))), slow);
+  const toSvg = ([x, y], i) => [120 + (x - cx[i]) * scale[i], GROUND - (ground[i] - y) * scale[i]];
+  const out = {};
+  for (const [name, pts] of Object.entries(track)) out[name] = pts.map(toSvg);
+  return { pts: out, ball: ball.map((b, i) => b && toSvg(b, i)), n };
+}
+
+// 播放時間 → 關節座標：Catmull-Rom 曲線在格與格之間補間，速度連續
+function mimicAt(M, t) {
+  const fi = Math.min(Math.max(t * analysis.fps, 0), M.n - 1), i = Math.floor(fi), u = fi - i;
+  const at = k => Math.min(Math.max(k, 0), M.n - 1);
+  const cr = (p0, p1, p2, p3) => [0, 1].map(c => 0.5 * (2 * p1[c] + (p2[c] - p0[c]) * u
+    + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * u * u + (3 * p1[c] - p0[c] - 3 * p2[c] + p3[c]) * u * u * u));
+  const P = {};
+  for (const [name, pts] of Object.entries(M.pts)) P[name] = cr(pts[at(i - 1)], pts[i], pts[at(i + 1)], pts[at(i + 2)]);
+  const b0 = M.ball[i], b1 = M.ball[at(i + 1)];
+  const ball = b0 && b1 ? [0, 1].map(c => b0[c] + (b1[c] - b0[c]) * u) : (u < 0.5 ? b0 : b1);
+  // 由 MediaPipe 的點組成火柴人的關節（名稱同 solve()）
+  const mix = (a, b, k) => [0, 1].map(c => a[c] + (b[c] - a[c]) * k);
+  const j = {};
+  for (const S of ['N', 'F']) {
+    for (const k of ['s', 'e', 'w', 'h', 'k', 'a', 'l', 'o', 'u']) j[k + S] = P[k + S];
+    j['g' + S] = mix(P['pk' + S], P['ix' + S], 0.5);   // 手掌中間
+    j['q' + S] = P['ix' + S];                          // 食指
+    const d = sub(P['o' + S], P['l' + S]), len = Math.hypot(...d) || 1;
+    j['t' + S] = [P['o' + S][0] + d[0] / len * 3, P['o' + S][1] + d[1] / len * 3];   // 腳尖
+  }
+  j.p = mix(j.hN, j.hF, 0.5); j.n = mix(j.sN, j.sF, 0.5);
+  j.m = mix(j.p, j.n, 1 / 3); j.c = mix(j.p, j.n, 2 / 3);
+  j.h = P.ear; j.nk = mix(j.n, j.h, 0.45);
+  const d = sub(P.nose, P.ear), len = Math.hypot(...d);
+  if (len > 1) { j.ns = [j.h[0] + d[0] / len * 8, j.h[1] + d[1] / len * 8]; j.nose = [j.h[0] + d[0] / len * 11, j.h[1] + d[1] / len * 11]; }
+  return { j, ball };
+}
+
+function drawMimic(t) {
+  const A = analysis, { j, ball } = mimicAt(A.mimic, t);
+  drawFigure(j, ball);
+  const last = A.frames.at(-1).t;
+  const ev = A.events.filter(e => A.frames[e.i].t <= t + 1e-3).at(-1);
+  const name = ev && EVENT_PHASE[current.action]?.[ev.label.replace('（估算）', '')];
+  $('demo-label').textContent = t > last + 1 / A.fps ? '這段時間未有分析' : ev ? ev.label : '準備';
+  $('demo-cue').textContent = t > last + 1 / A.fps ? '' : DEMOS[current.action]?.keys.find(k => k.label === name)?.cue ?? '';
+}
+
+// 「你的動作」不反轉、不畫籃框（位置未知）；「標準示範」按球員面向反轉，並顯示籃框
+function applyRightVisuals() {
+  const demoMode = rightMode === 'demo' || !analysis?.mimic;
+  $('demo-svg').style.transform = demoMode && analysis?.view?.side && analysis.view.facing < 0 ? 'scaleX(-1)' : '';
+  for (const n of hoop) n.style.display = demoMode && demo?.hoop ? '' : 'none';
+  for (const b of $('right-mode').children) b.classList.toggle('on', b.dataset.mode === (demoMode ? 'demo' : 'mimic'));
+  $('right-mode').children[0].disabled = !analysis?.mimic;
+}
+function setRightMode(m) {
+  if (rightMode === m) return;
+  rightMode = m;
+  applyRightVisuals();
+  if (m === 'demo' && demo) drawDemo();
+  updateRight();
+}
+function updateRight() {
+  if (!demo && !analysis?.mimic) return;
+  if (rightMode === 'mimic' && analysis?.mimic) drawMimic(video.currentTime);
+  else syncDemo();
+}
+$('right-mode').onclick = e => { const m = e.target.dataset?.mode; if (m && !e.target.disabled) { demoManual = false; setRightMode(m); } };
+// 播放時以螢幕更新率重畫右邊火柴人（影片本身每秒只有 30 格）
+video.addEventListener('play', () => {
+  const loop = () => { if (video.paused || video.ended) return; updateRight(); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+});
 video.addEventListener('play', () => { demoManual = false; pauseDemo(); });
 video.addEventListener('seeking', () => { demoManual = false; });
 
