@@ -100,7 +100,7 @@
       <button class="primary" id="pick" style="width:100%">上傳或拍攝影片</button>
       <button id="sample" style="width:100%;margin-top:8px">用示範片試試</button>
       <input type="file" id="file" accept="video/*" hidden>
-      <p class="hint">建議拍攝全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
+      <p class="hint">建議從側面拍攝（與示範同一角度）、全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
       <p class="msg" id="pick-msg" hidden></p>
       <div id="demo-home" style="margin-top:16px">
         <div class="demo" id="demo">
@@ -142,7 +142,7 @@
 
     <div class="compare" id="compare">
       <div class="stage">
-        <video id="video" playsinline preload="auto"></video>
+        <video id="video" playsinline muted preload="auto"></video>
         <canvas id="overlay"></canvas>
       </div>
       <div class="demo" id="cmp-demo"></div>
@@ -287,10 +287,11 @@ async function importVideo(f, action, extra = {}) {
   openLab(clip);
 }
 
-// 示範片：真人跳投，CC BY 4.0，來源見 samples/README.md
+// 示範片：側面拍攝的真人跳投（與火柴人同一角度），Pexels 授權，來源見 samples/README.md。
+// 全片 22 秒，頭 4 秒已有一球完整跳投，所以只分析這一段。
 const SAMPLE = {
-  file: 'samples/jumpshot.webm', name: '示範片：原地跳投', action: '投籃',
-  credit: '影片來源：Erčulj F、Štrumbelj E（2015），PLOS ONE，CC BY 4.0', url: 'https://doi.org/10.1371/journal.pone.0128885'
+  file: 'samples/jumpshot-side.mp4', type: 'video/mp4', name: '示範片：側面跳投', action: '投籃', analyzeTo: 4,
+  credit: '影片來源：PNW Production（Pexels）', url: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/'
 };
 $('sample').onclick = async () => {
   showMsg('');
@@ -300,8 +301,8 @@ $('sample').onclick = async () => {
   try {
     const res = await fetch(SAMPLE.file);
     if (!res.ok) throw new Error(res.status);
-    const file = new File([await res.blob()], SAMPLE.name, { type: 'video/webm' });
-    await importVideo(file, SAMPLE.action, { sample: SAMPLE.file, credit: SAMPLE.credit, creditUrl: SAMPLE.url });
+    const file = new File([await res.blob()], SAMPLE.name, { type: SAMPLE.type });
+    await importVideo(file, SAMPLE.action, { sample: SAMPLE.file, credit: SAMPLE.credit, creditUrl: SAMPLE.url, analyzeTo: SAMPLE.analyzeTo });
   } catch (err) {
     showMsg('下載示範片失敗，請檢查網絡連線後再試。');
   } finally {
@@ -341,6 +342,7 @@ async function openLab(clip) {
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = URL.createObjectURL(blob);
   video.src = videoUrl;
+  video.muted = true;   // 只看動作，不播聲音
   setSpeed(0.5);
   $('lab-title').textContent = clip.action;
   $('lab-meta').replaceChildren(`${clip.name}・${fmtDate(clip.created)}`, ...(clip.credit
@@ -775,7 +777,8 @@ async function analyzeClip(clip, blob, status) {
   try {
     v.src = url;
     await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('影片無法讀取')); });
-    const dur = v.duration, fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
+    // 示範片可只分析開頭一段（clip.analyzeTo 秒），免得試用時等太久
+    const dur = Math.min(v.duration, clip.analyzeTo ?? Infinity), fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
     const W = v.videoWidth, H = v.videoHeight, base = mpClock + 1000, frames = [];
     const crop = document.createElement('canvas'), cctx2 = crop.getContext('2d');
     let box = null;
@@ -877,6 +880,22 @@ function trackBall(A) {
   return track;
 }
 
+// 拍攝角度：側面拍時兩邊肩膀在畫面上重疊，肩寬遠小於軀幹長度；正面或背面拍時肩寬接近軀幹長度。
+// 面向：側面時鼻尖在耳朵前方，鼻尖在耳朵右邊即向右。
+function cameraView(A) {
+  let total = 0, side = 0, facing = 0;
+  for (const f of A.frames) {
+    const p = f.pose, ok = i => p && p[i * 4 + 3] >= MIN_VIS;
+    if (![11, 12, 23, 24].every(ok)) continue;
+    const px = i => [p[i * 4] * A.w, p[i * 4 + 1] * A.h], mid = (a, b) => px(a).map((v, k) => (v + px(b)[k]) / 2);
+    total++;
+    if (Math.hypot(...sub(px(11), px(12))) / Math.hypot(...sub(mid(11, 12), mid(23, 24))) < 0.45) side++;
+    const ears = [7, 8].filter(ok);
+    if (ok(0) && ears.length) facing += Math.sign(px(0)[0] - ears.reduce((s, i) => s + px(i)[0], 0) / ears.length);
+  }
+  return { side: total > 0 && side / total >= 0.5, facing: facing < 0 ? -1 : 1 };
+}
+
 // 關鍵時刻。起跳以「腳踝比前後 0.6 秒內站地位置高出多少」判斷，球員走近或走遠鏡頭也不會誤判。
 function findEvents(A) {
   const F = A.frames, n = F.length, win = Math.round(A.fps * 0.6), ev = [];
@@ -937,10 +956,13 @@ function showAnalysis(A) {
   A.metrics ??= A.frames.map(f => metricsOf(f, A));
   A.track ??= trackBall(A);
   A.events ??= findEvents(A);
+  A.view ??= cameraView(A);
   buildSync();
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
-  $('ana-status').textContent = `已分析 ${A.frames.length} 格（每秒 ${Math.round(A.fps)} 格）。辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、籃球 ${pct('ball')}%。`
+  const partial = A.frames.at(-1).t < (current?.duration ?? 0) - 0.5 ? `（只分析頭 ${fmt(A.frames.at(-1).t)} 秒）` : '';
+  $('ana-status').textContent = `已分析 ${A.frames.length} 格${partial}（每秒 ${Math.round(A.fps)} 格）。辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、籃球 ${pct('ball')}%。`
+    + (A.view.side ? `側面拍攝，球員向${A.view.facing > 0 ? '右' : '左'}。` : '這段影片不是側面拍攝，與側面的示範只能粗略對照；建議從側面重拍。')
     + (body < 50 ? '大部分畫面未能辨識身體，請全身入鏡、光線充足後重拍。' : '')
     + ((A.version ?? 1) < ANALYSIS_VERSION ? '這是舊版分析，清除後重新分析可得到更準確的結果。' : '');
   $('ana-events').replaceChildren(...(A.events.length ? A.events.map(e => el('button', {
@@ -986,6 +1008,10 @@ function drawOverlay() {
   // 影片以 object-fit: contain 顯示，先計出畫面實際所在範圍
   const s = Math.min(W / video.videoWidth, H / video.videoHeight), cw = video.videoWidth * s, ch = video.videoHeight * s;
   const ox = (W - cw) / 2, oy = (H - ch) / 2, i = frameIndex(video.currentTime), f = analysis.frames[i];
+  if (video.currentTime > analysis.frames.at(-1).t + 1 / analysis.fps) {   // 超出已分析範圍
+    $('ana-table').replaceChildren(el('tr', {}, [el('td', { textContent: '這段時間未有分析', colSpan: 3 })]));
+    return;
+  }
   const xy = (arr, j, k) => [ox + arr[j * k] * cw, oy + arr[j * k + 1] * ch];
   const lines = (arr, k, conn, color, width, ok = () => true) => {
     octx.strokeStyle = color; octx.lineWidth = width; octx.beginPath();
@@ -1089,6 +1115,8 @@ const EVENT_PHASE = {
 let syncAnchors = null, demoManual = false;
 function buildSync() {
   syncAnchors = null;
+  // 球員向左時把火柴人左右反轉，兩邊同一方向才好對照（只在影片頁，離開時還原）
+  $('demo-svg').style.transform = analysis?.view?.side && analysis.view.facing < 0 ? 'scaleX(-1)' : '';
   const map = current && EVENT_PHASE[current.action], d = current && DEMOS[current.action];
   let hint = '分析影片後，火柴人會跟住你的動作節奏同步。';
   if (analysis && map && d) {
