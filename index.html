@@ -68,6 +68,12 @@
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
   .demo-phase b { margin-right: 6px; }
   .demo-phases button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
+  .compare { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; align-items: center; }
+  .compare.solo { grid-template-columns: 1fr; }
+  .compare.solo #cmp-demo { display: none; }
+  #cmp-demo svg { margin: 0; max-height: 60vh; }
+  #cmp-demo .demo-phase { font-size: 13px; min-height: 0; }
+  #cmp-demo .demo-phase span { display: block; color: var(--muted); font-size: 12px; }
   .stage { position: relative; }
   .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   table.metrics { width: 100%; border-collapse: collapse; margin: 12px 0 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -96,8 +102,12 @@
       <p class="msg" id="pick-msg" hidden></p>
       <div id="demo-home" style="margin-top:16px">
         <div class="demo" id="demo">
-          <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
-          <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
+          <!-- 影片頁會把畫面（demo-view）放在影片旁邊，控制（demo-ctrl）放在下方 -->
+          <div id="demo-view">
+            <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
+            <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
+          </div>
+          <div id="demo-ctrl">
           <input type="range" id="demo-seek" min="0" max="0" step="0.01" value="0" aria-label="示範時間軸">
           <div class="row">
             <button class="primary" id="demo-play">播放示範</button>
@@ -106,6 +116,7 @@
           </div>
           <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
           <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
+          </div>
         </div>
       </div>
     </div>
@@ -127,9 +138,12 @@
     <h1 id="lab-title"></h1>
     <p class="sub" id="lab-meta"></p>
 
-    <div class="stage">
-      <video id="video" playsinline preload="auto"></video>
-      <canvas id="overlay"></canvas>
+    <div class="compare" id="compare">
+      <div class="stage">
+        <video id="video" playsinline preload="auto"></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="demo" id="cmp-demo"></div>
     </div>
     <input type="range" id="seek" min="0" max="0" step="0.001" value="0" aria-label="時間軸">
     <div class="row">
@@ -158,8 +172,9 @@
     </div>
 
     <details class="card" id="lab-demo" style="margin-top:16px">
-      <summary>示範動作</summary>
-      <div id="lab-demo-box"></div>
+      <summary>示範動作控制</summary>
+      <p class="hint" id="sync-hint"></p>
+      <div class="demo" id="lab-demo-box"></div>
     </details>
 
     <h2>時間點筆記</h2>
@@ -306,8 +321,11 @@ async function openLab(clip) {
   $('lab-meta').textContent = `${clip.name}・${fmtDate(clip.created)}`;
   $('note').value = '';
   renderMarks();
+  // 示範火柴人放在影片旁邊對照，控制收在下方
   $('lab-demo').hidden = !DEMOS[clip.action];
-  $('lab-demo-box').append($('demo'));
+  $('compare').classList.toggle('solo', !DEMOS[clip.action]);
+  $('cmp-demo').append($('demo-view'));
+  $('lab-demo-box').append($('demo-ctrl'));
   loadDemo(clip.action);
   showAnalysis(await getAnalysis(clip.id));
   $('home').hidden = true; $('lab').hidden = false;
@@ -320,7 +338,7 @@ function closeLab() {
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = null; current = null;
   showAnalysis(null);
-  $('demo-home').append($('demo'));
+  $('demo').append($('demo-view'), $('demo-ctrl'));
   loadDemo($('action').value);
   $('lab').hidden = true; $('home').hidden = false;
   renderHome();
@@ -889,10 +907,11 @@ $('ana-legend').textContent = '實線：膝蓋角度　虛線：手肘角度　�
 function showAnalysis(A) {
   analysis = A;
   $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A;
-  if (!A) { $('ana-status').textContent = ANA_HINT; drawOverlay(); return; }
+  if (!A) { $('ana-status').textContent = ANA_HINT; buildSync(); drawOverlay(); return; }
   A.metrics ??= A.frames.map(f => metricsOf(f, A));
   A.track ??= trackBall(A);
   A.events ??= findEvents(A);
+  buildSync();
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
   $('ana-status').textContent = `已分析 ${A.frames.length} 格（每秒 ${Math.round(A.fps)} 格）。辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、籃球 ${pct('ball')}%。`
@@ -977,6 +996,7 @@ function drawOverlay() {
   octx.shadowBlur = 0;
   updateMetrics(i);
   drawChart(i);
+  syncDemo();
 }
 
 const ROWS = [['elbow', '手肘角度'], ['shoulder', '肩部角度'], ['hip', '髖部角度'], ['knee', '膝蓋角度'], ['ankle', '腳踝角度'], ['wrist', '手腕屈曲']];
@@ -1032,6 +1052,46 @@ if (video.requestVideoFrameCallback) {
   const onFrame = () => { drawOverlay(); video.requestVideoFrameCallback(onFrame); };
   video.requestVideoFrameCallback(onFrame);
 }
+
+// ---- 影片與示範同步 ----
+// 把分析找到的關鍵時刻對應示範動畫的階段，兩邊各按自己的節奏對齊：影片去到「出手」，火柴人也在「出手」。
+const EVENT_PHASE = {
+  投籃: { 蓄力最低: '下蹲蓄力', 起跳: '起跳舉球', 出手: '出手', 落地: '落地與隨球' },
+  急停跳投: { 蓄力最低: '收球蓄力', 起跳: '起跳出手', 出手: '起跳出手', 落地: '落地與隨球' },
+  上籃: { 蓄力最低: '收球・第一步', 起跳: '第二步起跳', 出手: '舉球上籃', 落地: '落地' }
+};
+let syncAnchors = null, demoManual = false;
+function buildSync() {
+  syncAnchors = null;
+  const map = current && EVENT_PHASE[current.action], d = current && DEMOS[current.action];
+  let hint = '分析影片後，火柴人會跟住你的動作節奏同步。';
+  if (analysis && map && d) {
+    const pts = [{ v: 0, d: 0 }];
+    for (const e of analysis.events) {
+      const name = map[e.label.replace('（估算）', '')], key = name && d.keys.find(k => k.label === name);
+      if (key && key.t >= pts.at(-1).d && analysis.frames[e.i].t > pts.at(-1).v) pts.push({ v: analysis.frames[e.i].t, d: key.t });
+    }
+    if (pts.length >= 3) {
+      pts.push({ v: Math.max(current.duration, pts.at(-1).v + 0.01), d: d.end });
+      syncAnchors = pts;
+      hint = `火柴人已按 ${pts.length - 2} 個關鍵時刻與影片同步；自行播放示範會暫停同步，再播放或拖動影片即恢復。`;
+    } else hint = '影片中未找到足夠的關鍵時刻，火柴人未能同步。';
+  } else if (current && d && !map) hint = '這個動作暫未支援與影片同步。';
+  $('sync-hint').textContent = hint;
+}
+function syncDemo() {
+  if (!syncAnchors || demoManual || demo !== DEMOS[current?.action]) return;
+  const t = video.currentTime, a = syncAnchors;
+  let k = 0;
+  while (k < a.length - 2 && a[k + 1].v <= t) k++;
+  const u = Math.min(Math.max((t - a[k].v) / (a[k + 1].v - a[k].v), 0), 1);
+  demoTime = a[k].d + (a[k + 1].d - a[k].d) * u;
+  drawDemo();
+}
+// 自行操作示範時暫停同步；影片再播放或跳轉就恢復
+for (const id of ['demo-play', 'demo-seek', 'demo-phases']) $(id).addEventListener('pointerdown', () => { demoManual = true; });
+video.addEventListener('play', () => { demoManual = false; pauseDemo(); });
+video.addEventListener('seeking', () => { demoManual = false; });
 
 loadDemo($('action').value);
 renderHome();
