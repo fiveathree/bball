@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AI 籃球動作實驗室</title>
-<meta name="description" content="上傳或拍攝籃球動作影片，慢動作、逐格檢視，並標記時間點筆記。">
+<meta name="description" content="上傳籃球動作影片，在瀏覽器內做骨架分析，並與示範動作並排同步對照。">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>
   :root {
     --bg: #f6f4f0; --card: #fff; --text: #1d1b18; --muted: #6b665e; --line: #e2ddd4;
@@ -88,56 +90,23 @@
 <body>
 <main>
 
-  <!-- 首頁：新增影片 + 影片庫 -->
-  <section id="home">
-    <h1>AI 籃球動作實驗室</h1>
-    <p class="sub">上傳或拍攝動作影片，用慢動作與逐格檢視拆解細節，並在關鍵時間點寫下筆記。</p>
+  <h1>AI 籃球動作實驗室</h1>
+  <p class="sub">左邊是真人影片，右邊是示範火柴人，兩邊按動作節奏同步。上傳你自己的影片，就會自動分析並與示範對照。</p>
 
-    <div class="card">
-      <label class="field">動作類型
-        <select id="action"></select>
-      </label>
-      <button class="primary" id="pick" style="width:100%">上傳或拍攝影片</button>
-      <button id="sample" style="width:100%;margin-top:8px">用示範片試試</button>
-      <input type="file" id="file" accept="video/*" hidden>
-      <p class="hint">建議從側面拍攝（與示範同一角度）、全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
-      <p class="msg" id="pick-msg" hidden></p>
-      <div id="demo-home" style="margin-top:16px">
-        <div class="demo" id="demo">
-          <!-- 影片頁會把畫面（demo-view）放在影片旁邊，控制（demo-ctrl）放在下方 -->
-          <div id="demo-view">
-            <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
-            <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
-          </div>
-          <div id="demo-ctrl">
-          <input type="range" id="demo-seek" min="0" max="0" step="0.01" value="0" aria-label="示範時間軸">
-          <div class="row">
-            <button class="primary" id="demo-play">播放示範</button>
-            <span class="row" id="demo-speeds"></span>
-            <button id="demo-dots">關節點</button>
-          </div>
-          <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
-          <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
-          </div>
-        </div>
-      </div>
-    </div>
+  <div class="row">
+    <select id="action" aria-label="動作類型"></select>
+    <button class="primary grow" id="pick">上傳或拍攝影片</button>
+    <input type="file" id="file" accept="video/*" hidden>
+  </div>
+  <p class="hint">建議從側面拍攝（與示範同一角度）、全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
+  <p class="msg" id="pick-msg" hidden></p>
 
-    <h2>我的影片</h2>
-    <div class="card">
-      <ul class="list" id="clips"></ul>
-      <p class="empty" id="clips-empty">尚未有影片。</p>
-    </div>
-  </section>
-
-  <!-- 檢視頁：播放、慢動作、逐格、時間點筆記 -->
-  <section id="lab" hidden>
-    <div class="row">
-      <button class="link" id="back">← 返回</button>
-      <span class="grow"></span>
+  <!-- 影片檢視：真人片（左）與示範火柴人（右）並排同步 -->
+  <section id="lab">
+    <div class="row" style="margin-top:16px">
+      <h2 class="grow" id="lab-title" style="margin:0"></h2>
       <button class="link danger" id="del">刪除影片</button>
     </div>
-    <h1 id="lab-title"></h1>
     <p class="sub" id="lab-meta"></p>
 
     <div class="compare" id="compare">
@@ -145,7 +114,10 @@
         <video id="video" playsinline muted preload="auto"></video>
         <canvas id="overlay"></canvas>
       </div>
-      <div class="demo" id="cmp-demo"></div>
+      <div class="demo" id="cmp-demo">
+        <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
+        <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
+      </div>
     </div>
     <input type="range" id="seek" min="0" max="0" step="0.001" value="0" aria-label="時間軸">
     <div class="row">
@@ -176,7 +148,16 @@
     <details class="card" id="lab-demo" style="margin-top:16px">
       <summary>示範動作控制</summary>
       <p class="hint" id="sync-hint"></p>
-      <div class="demo" id="lab-demo-box"></div>
+      <div class="demo" id="demo-ctrl">
+        <input type="range" id="demo-seek" min="0" max="0" step="0.01" value="0" aria-label="示範時間軸">
+        <div class="row">
+          <button class="primary" id="demo-play">播放示範</button>
+          <span class="row" id="demo-speeds"></span>
+          <button id="demo-dots">關節點</button>
+        </div>
+        <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
+        <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
+      </div>
     </details>
 
     <h2>時間點筆記</h2>
@@ -189,6 +170,11 @@
       <p class="empty" id="marks-empty">暫停在關鍵畫面（準備、發力、出手、落地），再按「標記目前時間」。</p>
     </div>
   </section>
+
+  <h2>我的影片</h2>
+  <div class="card">
+    <ul class="list" id="clips"></ul>
+  </div>
 
 </main>
 <script>
@@ -271,57 +257,64 @@ $('file').onchange = e => {
   if (f) importVideo(f, $('action').value);
 };
 
-// 檢查影片後存入影片庫並打開；extra 可附加來源資料（示範片用）
-async function importVideo(f, action, extra = {}) {
+// 檢查影片後存入影片庫並打開，然後自動分析：分析完火柴人就會與影片左右同步
+async function importVideo(f, action) {
   if (f.size > MAX_MB * 1024 * 1024) return showMsg(`影片超過 ${MAX_MB} MB，請剪短後再上傳。`);
   const dur = await probeDuration(f);
   if (dur == null) return showMsg('這部裝置的瀏覽器無法播放此影片格式，請改用 MP4 或 MOV。');
   if (dur > MAX_SEC) return showMsg(`影片長度超過 ${MAX_SEC} 秒，請只保留要分析的動作片段。`);
-  const clip = { id: crypto.randomUUID(), name: f.name, action, created: Date.now(), duration: dur, marks: [], ...extra };
+  const clip = { id: crypto.randomUUID(), name: f.name, action, created: Date.now(), duration: dur, marks: [] };
   try {
     navigator.storage?.persist?.();
     await addClip(clip, f);
   } catch (err) {
     return showMsg('儲存失敗，可能是裝置空間不足。');
   }
-  openLab(clip);
+  await openLab(clip);
+  $('ana-run').click();
 }
 
-// 示範片：側面拍攝的真人跳投（與火柴人同一角度），Pexels 授權，來源見 samples/README.md。
-// 全片 22 秒，頭 4 秒已有一球完整跳投，所以只分析這一段。
+// 示範片（首頁預設）：側面拍攝的真人跳投，與火柴人同一角度；Pexels 授權，來源見 samples/README.md。
+// 分析結果已預先計好（samples/jumpshot-side.json，只分析頭 4 秒），打開即可同步，不用等。
 const SAMPLE = {
-  file: 'samples/jumpshot-side.mp4', type: 'video/mp4', name: '示範片：側面跳投', action: '投籃', analyzeTo: 4,
-  credit: '影片來源：PNW Production（Pexels）', url: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/'
+  id: 'sample', sample: true, file: 'samples/jumpshot-side.mp4', analysis: 'samples/jumpshot-side.json',
+  name: '示範片：側面跳投', action: '投籃', duration: 21.553333, analyzeTo: 4, marks: [],
+  credit: '影片來源：PNW Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/'
 };
-$('sample').onclick = async () => {
-  showMsg('');
-  const existing = (await listClips()).find(c => c.sample === SAMPLE.file);
-  if (existing) return openLab(existing);
-  $('sample').disabled = true;
-  try {
-    const res = await fetch(SAMPLE.file);
-    if (!res.ok) throw new Error(res.status);
-    const file = new File([await res.blob()], SAMPLE.name, { type: SAMPLE.type });
-    await importVideo(file, SAMPLE.action, { sample: SAMPLE.file, credit: SAMPLE.credit, creditUrl: SAMPLE.url, analyzeTo: SAMPLE.analyzeTo });
-  } catch (err) {
-    showMsg('下載示範片失敗，請檢查網絡連線後再試。');
-  } finally {
-    $('sample').disabled = false;
+let sampleData = null;
+async function sampleAnalysis() {
+  if (!sampleData) {
+    try {
+      const j = await fetch(SAMPLE.analysis).then(r => r.json());
+      const f32 = a => a && Float32Array.from(a);
+      j.frames = j.frames.map(f => ({ t: f.t, pose: f32(f.pose), world: f32(f.world), lh: f32(f.lh), rh: f32(f.rh), face: null, balls: f.balls }));
+      sampleData = j;
+    } catch (err) {
+      return null;   // 載入失敗就讓用戶自行分析
+    }
   }
-};
+  return sampleData;
+}
+const clipVideo = clip => clip.sample
+  ? fetch(clip.file).then(r => r.ok ? r.blob() : null).catch(() => null)
+  : getVideo(clip.id);
 
-async function renderHome() {
-  const clips = (await listClips()).sort((a, b) => b.created - a.created);
-  $('clips').replaceChildren(...clips.map(c => el('li', {}, [
-    el('button', { className: 'clip-open', onclick: () => openLab(c) }, [
-      el('b', { textContent: `${c.action}・${c.name}` }),
-      el('span', { className: 'meta', textContent: `${fmtDate(c.created)}・${fmt(c.duration)} 秒・${c.marks.length} 個筆記` })
+async function renderList() {
+  const all = await listClips();
+  // 舊版「用示範片試試」曾把示範片複製進影片庫，現在示範片固定在首頁，刪走這些副本釋放空間
+  for (const c of all) if (c.sample && c.id !== SAMPLE.id) await deleteClip(c.id);
+  const clips = all.filter(c => !c.sample).sort((a, b) => b.created - a.created);
+  $('clips').replaceChildren(...[SAMPLE, ...clips].map(c => el('li', {}, [
+    el('button', { className: 'clip-open', onclick: () => { openLab(c); scrollTo(0, 0); } }, [
+      el('b', { textContent: `${c.action}・${c.name}${current?.id === c.id ? '（顯示中）' : ''}` }),
+      el('span', { className: 'meta', textContent: c.sample
+        ? `${c.credit}・${c.marks.length} 個筆記`
+        : `${fmtDate(c.created)}・${fmt(c.duration)} 秒・${c.marks.length} 個筆記` })
     ])
   ])));
-  $('clips-empty').hidden = clips.length > 0;
 }
 
-// ---- 檢視頁 ----
+// ---- 檢視 ----
 const video = $('video');
 let current = null, videoUrl = null;
 
@@ -336,40 +329,27 @@ const markSpeed = speedButtons($('speeds'), s => setSpeed(s));
 function setSpeed(s) { video.playbackRate = s; markSpeed(s); }
 
 async function openLab(clip) {
-  const blob = await getVideo(clip.id);
-  if (!blob) return showMsg('找不到影片檔案，可能已被瀏覽器清除。');
+  if (clip.sample) clip.marks = (await listClips()).find(c => c.id === clip.id)?.marks ?? [];
+  const blob = await clipVideo(clip);
+  if (!blob) return showMsg(clip.sample ? '載入示範片失敗，請檢查網絡連線後再試。' : '找不到影片檔案，可能已被瀏覽器清除。');
+  showMsg('');
   current = clip;
+  video.pause();
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = URL.createObjectURL(blob);
   video.src = videoUrl;
   video.muted = true;   // 只看動作，不播聲音
   setSpeed(0.5);
   $('lab-title').textContent = clip.action;
-  $('lab-meta').replaceChildren(`${clip.name}・${fmtDate(clip.created)}`, ...(clip.credit
+  $('lab-meta').replaceChildren(clip.sample ? clip.name : `${clip.name}・${fmtDate(clip.created)}`, ...(clip.credit
     ? [el('br'), el('a', { href: clip.creditUrl, textContent: clip.credit, target: '_blank', rel: 'noopener' })] : []));
+  $('del').hidden = !!clip.sample;
+  $('action').value = clip.action;
   $('note').value = '';
   renderMarks();
-  // 示範火柴人放在影片旁邊對照，控制收在下方
-  $('lab-demo').hidden = !DEMOS[clip.action];
-  $('compare').classList.toggle('solo', !DEMOS[clip.action]);
-  $('cmp-demo').append($('demo-view'));
-  $('lab-demo-box').append($('demo-ctrl'));
   loadDemo(clip.action);
-  showAnalysis(await getAnalysis(clip.id));
-  $('home').hidden = true; $('lab').hidden = false;
-  scrollTo(0, 0);
-}
-
-function closeLab() {
-  video.pause();
-  video.removeAttribute('src'); video.load();
-  if (videoUrl) URL.revokeObjectURL(videoUrl);
-  videoUrl = null; current = null;
-  showAnalysis(null);
-  $('demo').append($('demo-view'), $('demo-ctrl'));
-  loadDemo($('action').value);
-  $('lab').hidden = true; $('home').hidden = false;
-  renderHome();
+  showAnalysis(clip.sample ? await sampleAnalysis() : await getAnalysis(clip.id));
+  renderList();
 }
 
 function step(dir) {
@@ -393,16 +373,15 @@ $('seek').oninput = e => { video.pause(); video.currentTime = +e.target.value; }
 $('play').onclick = () => video.paused ? video.play() : video.pause();
 $('prev').onclick = () => step(-1);
 $('next').onclick = () => step(1);
-$('back').onclick = closeLab;
 $('del').onclick = async () => {
   if (!confirm('確定刪除這段影片及所有筆記？此操作無法復原。')) return;
   await deleteClip(current.id);
-  closeLab();
+  openLab(SAMPLE);
 };
 
 // 鍵盤：← → 逐格，空白鍵播放／暫停（輸入筆記時不攔截）
 document.addEventListener('keydown', e => {
-  if ($('lab').hidden || e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT') return;
   if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
   else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
   else if (e.key === ' ') { e.preventDefault(); $('play').click(); }
@@ -663,7 +642,8 @@ function drawDemo() {
 function loadDemo(action) {
   pauseDemo();
   demo = DEMOS[action];
-  $('demo').hidden = !demo;
+  $('compare').classList.toggle('solo', !demo);   // 「其他」沒有示範，影片佔全寬
+  $('lab-demo').hidden = !demo;
   if (!demo) return;
   for (const n of hoop) n.style.display = demo.hoop ? '' : 'none';
   $('demo-seek').max = demo.end;
@@ -951,7 +931,7 @@ $('ana-legend').textContent = '實線：膝蓋角度　虛線：手肘角度　�
 
 function showAnalysis(A) {
   analysis = A;
-  $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A;
+  $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A || !!current?.sample;
   if (!A) { $('ana-status').textContent = ANA_HINT; buildSync(); drawOverlay(); return; }
   A.metrics ??= A.frames.map(f => metricsOf(f, A));
   A.track ??= trackBall(A);
@@ -976,7 +956,7 @@ $('ana-run').onclick = async () => {
   const clip = current, status = s => { if (current === clip) $('ana-status').textContent = s; };
   analyzing = true; $('ana-run').disabled = true; video.pause();
   try {
-    const A = await analyzeClip(clip, await getVideo(clip.id), status);
+    const A = await analyzeClip(clip, await clipVideo(clip), status);
     await putAnalysis(A);
     if (current === clip) showAnalysis(A);
   } catch (err) {
@@ -1147,8 +1127,7 @@ for (const id of ['demo-play', 'demo-seek', 'demo-phases']) $(id).addEventListen
 video.addEventListener('play', () => { demoManual = false; pauseDemo(); });
 video.addEventListener('seeking', () => { demoManual = false; });
 
-loadDemo($('action').value);
-renderHome();
+openLab(SAMPLE);
 </script>
 </body>
 </html>
