@@ -10,12 +10,12 @@
 <style>
   :root {
     --bg: #f6f4f0; --card: #fff; --text: #1d1b18; --muted: #6b665e; --line: #e2ddd4;
-    --accent: #e4572e; --accent-text: #fff; --danger: #b3261e;
+    --accent: #e4572e; --accent-text: #fff; --danger: #b3261e; --good: #2e7d32;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #151413; --card: #211f1d; --text: #f1ede6; --muted: #a39d93; --line: #35322e;
-      --accent: #f0703f; --accent-text: #1a0f0a; --danger: #f2b8b5;
+      --accent: #f0703f; --accent-text: #1a0f0a; --danger: #f2b8b5; --good: #81c784;
     }
   }
   * { box-sizing: border-box; }
@@ -81,6 +81,13 @@
   .step-title { padding: 0; color: var(--text); font-weight: 600; }
   .step table.metrics { margin: 4px 0; font-size: 13px; }
   .step .hint { margin-top: 4px; }
+  .checks { list-style: none; margin: 6px 0; padding: 0; font-size: 14px; }
+  .checks li { padding-left: 1.3em; text-indent: -1.3em; margin: 3px 0; }
+  .checks li::before { display: inline-block; width: 1.3em; text-indent: 0; font-weight: 700; }
+  .checks .good::before { content: "✓"; color: var(--good); }
+  .checks .bad::before { content: "✗"; color: var(--danger); }
+  .summary { padding: 8px 0 4px; }
+  .summary p { margin: 0 0 4px; }
   #cmp-demo .demo-phase { font-size: 13px; min-height: 0; }
   #cmp-demo .demo-phase span { display: block; color: var(--muted); font-size: 12px; }
   .stage { position: relative; }
@@ -972,10 +979,10 @@ const bothSides = (m, k) => { const v = [m.side[0][k], m.side[1][k]].filter(x =>
 // 每個階段要看的數值：[名稱, 取值(m, 投籃手), 是否比例]
 const PHASE_METRICS = {
   蓄力最低: [['膝蓋角度', m => bothSides(m, 'knee')], ['髖部角度', m => bothSides(m, 'hip')], ['軀幹前傾', m => m.lean]],
-  起跳: [['膝蓋角度', m => bothSides(m, 'knee')], ['腳踝角度', m => bothSides(m, 'ankle')]],
+  起跳: [['腳踝角度', m => bothSides(m, 'ankle')]],   // 膝蓋伸展在判斷中按離地前最伸直的一格計
   出手: [['投籃手手肘', (m, s) => m.side[s].elbow], ['投籃手肩部', (m, s) => m.side[s].shoulder], ['軀幹前傾', m => m.lean]],
   最高點: [['投籃手手肘', (m, s) => m.side[s].elbow], ['膝蓋角度', m => bothSides(m, 'knee')]],
-  落地: [['膝蓋角度', m => bothSides(m, 'knee')], ['站距 ÷ 肩寬', m => m.stance, true]],
+  落地: [['站距 ÷ 肩寬', m => m.stance, true]],   // 屈膝緩衝在判斷中按落地後最彎的一格計
   膝蓋最彎: [['膝蓋角度', m => bothSides(m, 'knee')], ['軀幹前傾', m => m.lean]]
 };
 const phaseKey = label => label.replace('（估算）', '');
@@ -993,8 +1000,61 @@ function prepare(A) {
   A.view ??= cameraView(A);
   A.mimic ??= buildMimic(A);
   A.side ??= shootingSide(A);
+  A.checks ??= A.events.map(e => assess(A, e, shotFacts(A, e.shot)));
   return A;
 }
+
+// ---- 逐項判斷「做得好／可改善」----
+// 範圍按一般投籃教學的參考，並非絕對標準；看不清楚（沒有數值）的項目不判斷。
+const good = text => ({ ok: true, text }), bad = text => ({ ok: false, text });
+const deg = v => `${Math.round(v)}°`;
+// 一球之內的資料：離地前膝蓋最伸直的角度、落地後 0.3 秒內膝蓋最彎的角度、出手比最高點遲幾多秒。
+// （起跳到落地的水平移動未有判斷：鏡頭跟拍時畫面位置不代表真實移動，要先估算鏡頭移動。）
+function shotFacts(A, shot) {
+  const ev = A.events.filter(e => e.shot === shot), at = name => ev.find(e => phaseKey(e.label) === name);
+  const take = at('起跳'), land = at('落地'), apex = at('最高點'), rel = at('出手'), facts = {};
+  const knees = (from, to) => A.metrics.slice(from, to + 1).map(m => m && bothSides(m, 'knee')).filter(v => v != null);
+  if (take && apex) { const k = knees(take.i, apex.i); if (k.length) facts.push = Math.max(...k); }
+  if (land) { const k = knees(land.i, land.i + Math.round(A.fps * 0.3)); if (k.length) facts.cushion = Math.min(...k); }
+  if (rel && apex) { facts.late = A.frames[rel.i].t - A.frames[apex.i].t; facts.estimated = rel.label.includes('估算'); }
+  return facts;
+}
+const crouchChecks = ({ knee, lean }) => [
+  knee == null ? null : knee < 80 ? bad(`膝蓋屈到 ${deg(knee)}，蹲得太深，出手會變慢。`)
+    : knee > 140 ? bad(`膝蓋只屈到 ${deg(knee)}，蓄力不足，力量會集中在手臂。`) : good(`膝蓋屈到 ${deg(knee)}，蓄力深度合適。`),
+  lean == null ? null : lean > 30 ? bad(`上身前傾 ${deg(lean)}，重心太前，起跳容易向前衝。`) : good(`上身前傾 ${deg(lean)}，背部保持挺直。`)
+];
+const PHASE_CHECKS = {
+  蓄力最低: crouchChecks,
+  膝蓋最彎: crouchChecks,
+  起跳: ({ push }) => [
+    push == null ? null : push >= 155 ? good(`離地時膝蓋伸展到 ${deg(push)}，腿部力量用得完整。`) : bad(`離地時膝蓋只伸到 ${deg(push)}，腿部力量未完全發揮。`)
+  ],
+  出手: ({ elbow, lean, late, estimated }) => [
+    elbow == null ? null : elbow >= 150 ? good(`投籃手伸展到 ${deg(elbow)}，手臂伸直出手。`)
+      : elbow >= 130 ? bad(`投籃手只伸到 ${deg(elbow)}，出手時手臂未完全伸直。`) : bad(`投籃手只有 ${deg(elbow)}，比較像推球，手臂需要向上伸直。`),
+    late == null ? null : late > 0.07 ? bad(`在最高點之後約 ${fmt(late)} 秒才出手，身體已開始下降，力量會流失。`)
+      : late < -0.2 ? bad(`比最高點早約 ${fmt(-late)} 秒出手，未用盡起跳高度。`)
+      : good(`在接近最高點時出手，時機合適${estimated ? '（出手時間為估算）' : ''}。`),
+    lean == null ? null : lean > 15 ? bad(`出手時上身傾斜 ${deg(lean)}，應保持身體垂直。`) : good(`出手時身體保持垂直（傾斜 ${deg(lean)}）。`)
+  ],
+  最高點: ({ elbow, knee }) => [
+    elbow == null ? null : elbow >= 150 ? good(`最高點時投籃手保持伸直（${deg(elbow)}），隨球動作完整。`) : bad(`最高點時投籃手只有 ${deg(elbow)}，隨球動作收得太早。`),
+    knee == null ? null : knee >= 155 ? good(`身體在空中完全伸展（膝蓋 ${deg(knee)}）。`) : bad(`空中膝蓋仍屈 ${deg(knee)}，身體未完全伸展。`)
+  ],
+  落地: ({ cushion, stance }) => [
+    cushion == null ? null : cushion > 160 ? bad(`落地後膝蓋只屈到 ${deg(cushion)}，緩衝不足，衝擊會直接傳到關節。`) : good(`落地後屈膝緩衝到 ${deg(cushion)}。`),
+    stance == null ? null : stance < 0.5 ? bad(`落地時雙腳太近（約肩寬的 ${stance.toFixed(1)} 倍），容易失去平衡。`)
+      : stance > 2 ? bad(`落地時雙腳分得太開（約肩寬的 ${stance.toFixed(1)} 倍）。`) : good('落地時雙腳距離平衡。')
+  ]
+};
+function assess(A, e, facts) {
+  const m = A.metrics[e.i];
+  if (!m) return [];
+  const ctx = { knee: bothSides(m, 'knee'), elbow: m.side[A.side].elbow, lean: m.lean, stance: m.stance, ...facts };
+  return (PHASE_CHECKS[phaseKey(e.label)]?.(ctx) ?? []).filter(Boolean);
+}
+const checkList = items => el('ul', { className: 'checks' }, items.map(c => el('li', { className: c.ok ? 'good' : 'bad', textContent: c.text })));
 
 async function renderBreakdown() {
   const A = analysis, box = $('breakdown'), note = text => box.replaceChildren(el('p', { className: 'empty', textContent: text }));
@@ -1011,7 +1071,16 @@ async function renderBreakdown() {
     className: sh === A.pickShot ? 'on' : '', textContent: `第 ${sh + 1} 球`, onclick: () => { A.pickShot = sh; renderBreakdown(); }
   }))) : null;
   const refShot = ref?.events[0]?.shot;
-  box.replaceChildren(...(picker ? [picker] : []), ...A.events.filter(e => e.shot === A.pickShot).map(e => {
+  // 這一球的總結：做得好幾項、可改善幾項，並列出最值得改善的（最多 3 點）
+  const shotEvents = A.events.filter(e => e.shot === A.pickShot);
+  const all = shotEvents.flatMap(e => A.checks[A.events.indexOf(e)]), bads = all.filter(c => !c.ok);
+  const summary = el('div', { className: 'summary' }, [
+    el('p', { textContent: `這一球：做得好 ${all.length - bads.length} 項，可改善 ${bads.length} 項。` }),
+    bads.length ? el('div', {}, [el('b', { textContent: '最值得改善' }), checkList(bads.slice(0, 3))])
+      : el('p', { className: 'hint', textContent: '各項都在參考範圍內。' })
+  ]);
+  box.replaceChildren(...(picker ? [picker] : []), summary, ...shotEvents.map(e => {
+    const checks = A.checks[A.events.indexOf(e)];
     const key = phaseKey(e.label), t = A.frames[e.i].t, m = A.metrics[e.i], { j, ball } = mimicAt(A.mimic, t);
     const re = ref?.events.find(r => r.shot === refShot && phaseKey(r.label) === key), rm = re && ref.metrics[re.i];
     const head = [el('th'), el('th', { textContent: ref ? '你' : '數值' }), ...(ref ? [el('th', { textContent: '示範片' })] : [])];
@@ -1023,13 +1092,13 @@ async function renderBreakdown() {
       el('div', { className: 'demo step-pic', innerHTML: figureSvg(j, ball) }),
       el('div', { className: 'grow' }, [
         el('button', { className: 'link step-title', textContent: `${e.label}・${fmt(t)} 秒`, onclick: () => { video.pause(); video.currentTime = t; } }),
+        checkList(checks),
         el('table', { className: 'metrics' }, [el('tr', {}, head), ...rows]),
-        el('p', { className: 'hint', textContent: PHASE_TIPS[key] ?? '' })
+        ...(checks.some(c => !c.ok) && PHASE_TIPS[key] ? [el('p', { className: 'hint', textContent: `做法：${PHASE_TIPS[key]}` })] : [])
       ])
     ]);
-  }), el('p', { className: 'hint', textContent: ref
-    ? '示範片數值來自一名動作良好的球員，只供參考，並非唯一標準。'
-    : '示範片是動作良好的參考；上載你的影片後，數值會與示範片並列比較。' }));
+  }), el('p', { className: 'hint', textContent: '「做得好／可改善」按一般投籃教學的參考範圍判斷，角度由單一鏡頭估算，只供參考。'
+    + (ref ? '示範片數值來自一名動作良好的球員，並非唯一標準。' : '上載你的影片後，數值會與示範片並列比較。') }));
 }
 
 // ---- 右邊火柴人複製真人動作（「你的動作」）----
@@ -1163,7 +1232,9 @@ function drawMimic(t) {
   const out = t > A.frames.at(-1).t + 1 / A.fps;
   const ev = A.events.filter(e => A.frames[e.i].t <= t + 1e-3).at(-1);
   $('demo-label').textContent = out ? '這段時間未有分析' : ev ? ev.label : '準備';
-  $('demo-cue').textContent = out || !ev ? '' : PHASE_TIPS[phaseKey(ev.label)] ?? '';
+  // 說明：這個時刻可改善的地方優先，否則顯示做得好的地方
+  const checks = ev ? A.checks[A.events.indexOf(ev)] : [], c = checks.find(x => !x.ok) ?? checks[0];
+  $('demo-cue').textContent = out || !c ? '' : `${c.ok ? '做得好' : '可改善'}：${c.text}`;
 }
 function updateRight() {
   if (analysis?.mimic) return drawMimic(video.currentTime);
