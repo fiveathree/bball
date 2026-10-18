@@ -25,6 +25,7 @@
   h1 { font-size: 22px; margin: 4px 0 2px; }
   h2 { font-size: 17px; margin: 24px 0 8px; }
   p.sub { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  a { color: var(--accent); }
   button, select, input[type=text] {
     font: inherit; color: inherit; border-radius: 10px; border: 1px solid var(--line);
     background: var(--card); padding: 10px 14px; min-height: 44px;
@@ -97,6 +98,7 @@
         <select id="action"></select>
       </label>
       <button class="primary" id="pick" style="width:100%">上傳或拍攝影片</button>
+      <button id="sample" style="width:100%;margin-top:8px">用示範片試試</button>
       <input type="file" id="file" accept="video/*" hidden>
       <p class="hint">建議拍攝全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
       <p class="msg" id="pick-msg" hidden></p>
@@ -263,18 +265,19 @@ function probeDuration(blob) {
 // ---- 首頁 ----
 $('action').append(...ACTIONS.map(a => el('option', { value: a, textContent: a })));
 $('pick').onclick = () => { showMsg(''); $('file').click(); };
-$('file').onchange = async e => {
+$('file').onchange = e => {
   const f = e.target.files[0];
   e.target.value = '';
-  if (!f) return;
+  if (f) importVideo(f, $('action').value);
+};
+
+// 檢查影片後存入影片庫並打開；extra 可附加來源資料（示範片用）
+async function importVideo(f, action, extra = {}) {
   if (f.size > MAX_MB * 1024 * 1024) return showMsg(`影片超過 ${MAX_MB} MB，請剪短後再上傳。`);
   const dur = await probeDuration(f);
   if (dur == null) return showMsg('這部裝置的瀏覽器無法播放此影片格式，請改用 MP4 或 MOV。');
   if (dur > MAX_SEC) return showMsg(`影片長度超過 ${MAX_SEC} 秒，請只保留要分析的動作片段。`);
-  const clip = {
-    id: crypto.randomUUID(), name: f.name, action: $('action').value,
-    created: Date.now(), duration: dur, marks: []
-  };
+  const clip = { id: crypto.randomUUID(), name: f.name, action, created: Date.now(), duration: dur, marks: [], ...extra };
   try {
     navigator.storage?.persist?.();
     await addClip(clip, f);
@@ -282,6 +285,28 @@ $('file').onchange = async e => {
     return showMsg('儲存失敗，可能是裝置空間不足。');
   }
   openLab(clip);
+}
+
+// 示範片：真人跳投，CC BY 4.0，來源見 samples/README.md
+const SAMPLE = {
+  file: 'samples/jumpshot.webm', name: '示範片：原地跳投', action: '投籃',
+  credit: '影片來源：Erčulj F、Štrumbelj E（2015），PLOS ONE，CC BY 4.0', url: 'https://doi.org/10.1371/journal.pone.0128885'
+};
+$('sample').onclick = async () => {
+  showMsg('');
+  const existing = (await listClips()).find(c => c.sample === SAMPLE.file);
+  if (existing) return openLab(existing);
+  $('sample').disabled = true;
+  try {
+    const res = await fetch(SAMPLE.file);
+    if (!res.ok) throw new Error(res.status);
+    const file = new File([await res.blob()], SAMPLE.name, { type: 'video/webm' });
+    await importVideo(file, SAMPLE.action, { sample: SAMPLE.file, credit: SAMPLE.credit, creditUrl: SAMPLE.url });
+  } catch (err) {
+    showMsg('下載示範片失敗，請檢查網絡連線後再試。');
+  } finally {
+    $('sample').disabled = false;
+  }
 };
 
 async function renderHome() {
@@ -318,7 +343,8 @@ async function openLab(clip) {
   video.src = videoUrl;
   setSpeed(0.5);
   $('lab-title').textContent = clip.action;
-  $('lab-meta').textContent = `${clip.name}・${fmtDate(clip.created)}`;
+  $('lab-meta').replaceChildren(`${clip.name}・${fmtDate(clip.created)}`, ...(clip.credit
+    ? [el('br'), el('a', { href: clip.creditUrl, textContent: clip.credit, target: '_blank', rel: 'noopener' })] : []));
   $('note').value = '';
   renderMarks();
   // 示範火柴人放在影片旁邊對照，控制收在下方
