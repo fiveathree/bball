@@ -352,9 +352,11 @@ function renderMarks() {
 // 角度（度）：0 = 垂直向下，正數 = 向前（正面視角時為畫面右方）。
 // arms = [前上臂, 前前臂, 後上臂, 後前臂]；legs = [前大腿, 前小腿, 後大腿, 後小腿]。
 // 「前」指靠近鏡頭、深色那一邊（右手持球）；air = 離地高度。
-const BODY = { trunk: 38, head: 13, upper: 19, fore: 18, thigh: 27, shin: 26 };
+// hand = [前手腕, 後手腕] 相對前臂的屈曲：正數 = 手腕向後翻（托球），負數 = 向前下壓（出手）。
+// 腰、頸、腳掌的角度由軀幹前傾及離地高度自動推算，不用逐格寫。
+const BODY = { trunk: 38, neck: 13, upper: 19, fore: 18, hand: 7, thigh: 27, shin: 26, foot: 8 };
 const GROUND = 185, BALL_R = 6;
-const P = (x, t, arms, legs, air = 0) => ({ x, t, arms, legs, air });
+const P = (x, t, arms, legs, air = 0, hand = [0, 0]) => ({ x, t, arms, legs, air, hand });
 const RUN_A = [30, 0, -25, -50], RUN_B = [-25, -50, 30, 0];
 const SET = [160, 150, 135, 165], FOLLOW = [160, 140, 120, 150], LAND = [25, -10, 20, -15];
 
@@ -363,21 +365,21 @@ const SET = [160, 150, 135, 165], FOLLOW = [160, 140, 120, 150], LAND = [25, -10
 const DEMOS = {
   投籃: { hoop: true, keys: [
     { t: 0, label: '準備', cue: '雙腳與肩同寬，膝蓋微曲，球放在胸前，眼望籃框。', pose: P(70, 10, [40, 120, 30, 110], [25, -10, 15, -20]) },
-    { t: 0.5, label: '下蹲蓄力', cue: '屈膝降低重心，把球帶到下巴前方，手肘對準籃框。', pose: P(70, 15, [60, 150, 50, 140], [45, -20, 35, -30]) },
-    { t: 0.85, label: '起跳舉球', cue: '雙腳蹬地向上，把球舉到額頭前上方的出手點。', pose: P(70, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8) },
-    { t: 1.05, label: '出手', cue: '接近最高點時伸直手臂、手腕下壓，球從食指與中指離手。', pose: P(70, 3, SET, [2, -2, -2, -8], 14) },
-    { t: 1.4, label: '落地與隨球', cue: '手臂保持伸直、手腕下垂，在起跳位置附近平穩落地。', pose: P(72, 5, FOLLOW, LAND) },
+    { t: 0.5, label: '下蹲蓄力', cue: '屈膝降低重心，把球帶到下巴前方，手肘對準籃框。', pose: P(70, 15, [60, 150, 50, 140], [45, -20, 35, -30], 0, [30, 0]) },
+    { t: 0.85, label: '起跳舉球', cue: '雙腳蹬地向上，把球舉到額頭前上方的出手點。', pose: P(70, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8, [70, 20]) },
+    { t: 1.05, label: '出手', cue: '接近最高點時伸直手臂、手腕下壓，球從食指與中指離手。', pose: P(70, 3, SET, [2, -2, -2, -8], 14, [-20, 0]) },
+    { t: 1.4, label: '落地與隨球', cue: '手臂保持伸直、手腕下垂，在起跳位置附近平穩落地。', pose: P(72, 5, FOLLOW, LAND, 0, [-100, -50]) },
     { t: 2.4 }
   ], ball: [[0, 'wN'], [1.05, 'wN'], [1.25, [122, 18]], [1.4, [150, 8]], [1.55, [178, 14]], [1.75, [211, 40]], [1.95, [212, 80]], [2.2, [208, 'floor']]] },
 
   運球: { keys: [
-    { t: 0, label: '準備姿勢', cue: '屈膝降低重心，上身微向前，抬頭觀察場上。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
-    { t: 0.2, label: '下壓推球', cue: '用手指和指腹把球向下推，不要用手掌拍球。', pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25]) },
+    { t: 0, label: '準備姿勢', cue: '屈膝降低重心，上身微向前，抬頭觀察場上。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
+    { t: 0.2, label: '下壓推球', cue: '用手指和指腹把球向下推，不要用手掌拍球。', pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25], 0, [-40, 0]) },
     { t: 0.32, label: '球觸地反彈', cue: '保持低重心，眼睛不看球。' },
-    { t: 0.45, label: '迎球收回', cue: '球反彈時手掌在上方迎球、順勢緩衝，球不高於腰部。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
-    { t: 0.65, pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.45, label: '迎球收回', cue: '球反彈時手掌在上方迎球、順勢緩衝，球不高於腰部。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
+    { t: 0.65, pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25], 0, [-40, 0]) },
     { t: 0.77 },
-    { t: 0.9, pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.9, pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25], 0, [20, 0]) },
     { t: 1.3 }
   ], ball: [[0, 'wN'], [0.2, 'wN'], [0.32, ['wN', 'floor']], [0.45, 'wN'], [0.65, 'wN'], [0.77, ['wN', 'floor']], [0.9, 'wN']] },
 
@@ -385,8 +387,8 @@ const DEMOS = {
     { t: 0, label: '運球推進', cue: '用慣用手在身體前側運球，加速接近籃框。', pose: P(50, 15, [20, 40, -20, 30], RUN_A) },
     { t: 0.3, pose: P(80, 15, [30, 70, 20, -10], RUN_B) },
     { t: 0.6, label: '收球・第一步', cue: '右腳踏出的同時雙手收球，把球護在胸前。', pose: P(110, 15, [40, 110, 40, 100], [30, 10, -20, -40]) },
-    { t: 0.85, label: '第二步起跳', cue: '左腳踏地起跳，右膝向上提，把身體帶向籃框。', pose: P(140, 8, [100, 150, 80, 140], [80, 0, 15, 5]) },
-    { t: 1.1, label: '舉球上籃', cue: '在最高點伸直右手，用手腕輕托把球放到籃板方框。', pose: P(168, 8, [165, 170, 120, 150], [85, 10, 5, -10], 25) },
+    { t: 0.85, label: '第二步起跳', cue: '左腳踏地起跳，右膝向上提，把身體帶向籃框。', pose: P(140, 8, [100, 150, 80, 140], [80, 0, 15, 5], 0, [30, 0]) },
+    { t: 1.1, label: '舉球上籃', cue: '在最高點伸直右手，用手腕輕托把球放到籃板方框。', pose: P(168, 8, [165, 170, 120, 150], [85, 10, 5, -10], 25, [-30, 0]) },
     { t: 1.45, label: '落地', cue: '雙腳落地、屈膝緩衝，保持平衡。', pose: P(182, 5, [60, 80, 50, 70], [25, -5, 20, -15]) },
     { t: 2.0 }
   ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.25, [215, 28]], [1.4, [213, 52]], [1.6, [212, 110]], [1.8, [210, 'floor']]] },
@@ -395,17 +397,18 @@ const DEMOS = {
     { t: 0, label: '運球推進', cue: '抬頭運球推進，留意與防守者的距離。', pose: P(40, 15, [20, 40, -20, 30], RUN_A) },
     { t: 0.3, pose: P(68, 15, [30, 70, 20, -10], RUN_B) },
     { t: 0.55, label: '急停制動', cue: '一二步急停，前腳煞停、屈膝降低重心，上身不要繼續前衝。', pose: P(92, 5, [40, 110, 30, 110], [35, 10, -15, -35]) },
-    { t: 0.8, label: '收球蓄力', cue: '雙腳站穩對準籃框，把球帶到出手點下方。', pose: P(96, 10, [60, 150, 50, 140], [40, -15, 30, -25]) },
-    { t: 1.1, label: '起跳出手', cue: '垂直向上起跳，在最高點伸直手臂出手。', pose: P(96, 3, SET, [2, -2, -2, -8], 14) },
-    { t: 1.45, label: '落地與隨球', cue: '在起跳位置附近落地，身體不要向前飄。', pose: P(98, 5, FOLLOW, LAND) },
+    { t: 0.8, label: '收球蓄力', cue: '雙腳站穩對準籃框，把球帶到出手點下方。', pose: P(96, 10, [60, 150, 50, 140], [40, -15, 30, -25], 0, [30, 0]) },
+    { t: 0.97, pose: P(96, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8, [70, 20]) },
+    { t: 1.1, label: '起跳出手', cue: '垂直向上起跳，在最高點伸直手臂出手。', pose: P(96, 3, SET, [2, -2, -2, -8], 14, [-20, 0]) },
+    { t: 1.45, label: '落地與隨球', cue: '在起跳位置附近落地，身體不要向前飄。', pose: P(98, 5, FOLLOW, LAND, 0, [-100, -50]) },
     { t: 2.5 }
   ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.3, [142, 15]], [1.45, [168, 6]], [1.6, [192, 14]], [1.8, [211, 40]], [2.0, [212, 80]], [2.3, [208, 'floor']]] },
 
   傳球: { keys: [
-    { t: 0, label: '持球於胸前', cue: '雙手持球在胸前，手肘自然向下，眼望傳球目標。', pose: P(80, 8, [30, 120, 25, 115], [15, -5, 10, -10]) },
-    { t: 0.4, label: '跨步', cue: '向傳球方向跨出一步，把力量由腳傳到手。', pose: P(88, 12, [20, 130, 18, 128], [35, 10, -15, -30]) },
-    { t: 0.65, label: '雙手推出', cue: '雙臂向前伸直，手腕外翻，拇指朝下。', pose: P(90, 12, [85, 90, 82, 88], [35, 10, -15, -30]) },
-    { t: 1.0, label: '隨球動作', cue: '手臂保持伸直指向目標，球應該直線飛向隊友胸口。', pose: P(90, 12, [82, 85, 80, 84], [35, 10, -15, -30]) },
+    { t: 0, label: '持球於胸前', cue: '雙手持球在胸前，手肘自然向下，眼望傳球目標。', pose: P(80, 8, [30, 120, 25, 115], [15, -5, 10, -10], 0, [20, 20]) },
+    { t: 0.4, label: '跨步', cue: '向傳球方向跨出一步，把力量由腳傳到手。', pose: P(88, 12, [20, 130, 18, 128], [35, 10, -15, -30], 0, [30, 30]) },
+    { t: 0.65, label: '雙手推出', cue: '雙臂向前伸直，手腕外翻，拇指朝下。', pose: P(90, 12, [85, 90, 82, 88], [35, 10, -15, -30], 0, [-30, -30]) },
+    { t: 1.0, label: '隨球動作', cue: '手臂保持伸直指向目標，球應該直線飛向隊友胸口。', pose: P(90, 12, [82, 85, 80, 84], [35, 10, -15, -30], 0, [-50, -50]) },
     { t: 1.8 }
   ], ball: [[0, 'wN'], [0.65, 'wN'], [0.95, [180, 'wN']], [1.2, [262, 'wN']]] },
 
@@ -427,23 +430,37 @@ for (const d of Object.values(DEMOS)) {
   d.keys.forEach((k, i) => { k.pose ??= d.keys[i - 1].pose; });
   d.ball = d.ball.map(([t, at]) => ({ t, at }));
   d.end = d.keys.at(-1).t;
+  // 每個姿勢數值一欄，方便逐欄做平滑插值
+  const vecs = d.keys.map(({ pose: p }) => [p.x, p.t, p.air, ...p.arms, ...p.legs, ...p.hand]);
+  d.cols = vecs[0].map((_, c) => vecs.map(v => v[c]));
 }
+const fromVec = v => P(v[0], v[1], v.slice(3, 7), v.slice(7, 11), v[2], v.slice(11, 13));
 
 // 由角度計出各關節座標（正向運動學），再把最低的腳放回地面
 function solve(pose, front) {
   const go = (p, deg, len) => { const r = deg * Math.PI / 180; return [p[0] + Math.sin(r) * len, p[1] + Math.cos(r) * len]; };
-  const sw = front ? 10 : 0, hw = front ? 7 : 0, up = 180 - pose.t;
-  const [uN, fN, uF, fF] = pose.arms, [tN, sN, tF, sF] = pose.legs;
+  const sw = front ? 10 : 0, hw = front ? 7 : 0, t = pose.t;
+  const [uN, fN, uF, fF] = pose.arms, [tN, sN, tF, sF] = pose.legs, [xN, xF] = pose.hand;
   const j = { p: [0, 0], hN: [hw, 0], hF: [-hw, 0] };
-  j.n = go(j.p, up, BODY.trunk); j.h = go(j.n, up, BODY.head);
+  j.m = go(j.p, 180 - t * 0.6, BODY.trunk / 2);   // 腰：上背比下背前傾多，背部呈弧線
+  j.n = go(j.m, 180 - t * 1.4, BODY.trunk / 2);
+  j.h = go(j.n, 180 - t * 0.4, BODY.neck);        // 頭比軀幹直，視線向前
   j.sN = [j.n[0] + sw, j.n[1]]; j.sF = [j.n[0] - sw, j.n[1]];
-  j.eN = go(j.sN, uN, BODY.upper); j.wN = go(j.eN, fN, BODY.fore); j.bN = go(j.wN, fN, BALL_R + 1);
-  j.eF = go(j.sF, uF, BODY.upper); j.wF = go(j.eF, fF, BODY.fore); j.bF = go(j.wF, fF, BALL_R + 1);
+  j.eN = go(j.sN, uN, BODY.upper); j.wN = go(j.eN, fN, BODY.fore);
+  j.eF = go(j.sF, uF, BODY.upper); j.wF = go(j.eF, fF, BODY.fore);
+  j.qN = go(j.wN, fN + xN, BODY.hand); j.qF = go(j.wF, fF + xF, BODY.hand);
+  j.bN = go(j.wN, fN, BALL_R + 1); j.bF = go(j.wF, fF, BALL_R + 1);
   j.kN = go(j.hN, tN, BODY.thigh); j.aN = go(j.kN, sN, BODY.shin);
   j.kF = go(j.hF, tF, BODY.thigh); j.aF = go(j.kF, sF, BODY.shin);
-  j.tN = [j.aN[0] + (front ? 5 : 8), j.aN[1]]; j.tF = [j.aF[0] + (front ? -5 : 8), j.aF[1]];
   const dy = GROUND - pose.air - Math.max(j.aN[1], j.aF[1]);
   for (const k in j) j[k] = [j[k][0] + pose.x, j[k][1] + dy];
+  // 腳掌：貼地時平放，離地愈高腳尖愈向下
+  const foot = (a, side) => {
+    if (front) return [a[0] + side * 5, a[1]];
+    const lift = Math.min(Math.max((GROUND - a[1]) / 14, 0), 1);
+    return go(a, 90 - 55 * lift, BODY.foot);
+  };
+  j.tN = foot(j.aN, 1); j.tF = foot(j.aF, -1);
   return j;
 }
 
@@ -454,10 +471,17 @@ function ballAt(at, j) {
     y === 'floor' ? GROUND - BALL_R : typeof y === 'string' ? j[y][1] : y];
 }
 
-const lerp = (a, b, u) => a + (b - a) * u;
-const ease = u => u * u * (3 - 2 * u);
-const lerpPose = (a, b, u) => P(lerp(a.x, b.x, u), lerp(a.t, b.t, u),
-  a.arms.map((v, i) => lerp(v, b.arms[i], u)), a.legs.map((v, i) => lerp(v, b.legs[i], u)), lerp(a.air, b.air, u));
+// 單調三次插值：曲線經過每個關鍵姿勢，速度連續（不會每到一格就停頓），亦不會衝過頭
+function tangent(T, V, i) {
+  if (i <= 0 || i >= V.length - 1) return 0;
+  const d0 = (V[i] - V[i - 1]) / (T[i] - T[i - 1]), d1 = (V[i + 1] - V[i]) / (T[i + 1] - T[i]);
+  if (d0 * d1 <= 0) return 0;
+  return Math.sign(d0) * Math.min(Math.abs(d0 + d1) / 2, 3 * Math.min(Math.abs(d0), Math.abs(d1)));
+}
+function hermite(T, V, i, u, m0 = tangent(T, V, i), m1 = tangent(T, V, i + 1)) {
+  const h = T[i + 1] - T[i], u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * V[i] + (u3 - 2 * u2 + u) * h * m0 + (3 * u2 - 2 * u3) * V[i + 1] + (u3 - u2) * h * m1;
+}
 // 回傳 [前一個 key, 後一個 key, 進度 0–1]
 function seg(list, time) {
   let i = 0;
@@ -493,19 +517,31 @@ markDemoSpeed(demoSpeed);
 function drawDemo() {
   const d = demo;
   const [i, k, u] = seg(d.keys, demoTime);
-  const j = solve(lerpPose(d.keys[i].pose, d.keys[k].pose, ease(u)), d.front);
+  const T = d.keys.map(key => key.t);
+  const j = solve(fromVec(d.cols.map(col => i === k ? col[i] : hermite(T, col, i, u))), d.front);
   const pts = (...names) => names.map(n => j[n].map(v => v.toFixed(1)).join(',')).join(' ');
-  fig.farArm.setAttribute('points', pts('sF', 'eF', 'wF'));
+  fig.farArm.setAttribute('points', pts('sF', 'eF', 'wF', 'qF'));
   fig.farLeg.setAttribute('points', pts('hF', 'kF', 'aF', 'tF'));
-  fig.nearArm.setAttribute('points', pts('sN', 'eN', 'wN'));
+  fig.nearArm.setAttribute('points', pts('sN', 'eN', 'wN', 'qN'));
   fig.nearLeg.setAttribute('points', pts('hN', 'kN', 'aN', 'tN'));
-  fig.body.setAttribute('d', `M${pts('hF')} L${pts('hN')} M${pts('p')} L${pts('n')} M${pts('sF')} L${pts('sN')} M${pts('n')} L${pts('h')}`);
+  fig.body.setAttribute('d', `M${pts('hF')} L${pts('hN')} M${pts('p')} L${pts('m')} L${pts('n')} M${pts('sF')} L${pts('sN')} M${pts('n')} L${pts('h')}`);
   fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
   fig.ball.style.display = d.ball.length ? '' : 'none';
   if (d.ball.length) {
     const [bi, bk, bu] = seg(d.ball, demoTime);
-    const a = ballAt(d.ball[bi].at, j), b = ballAt(d.ball[bk].at, j);
-    fig.ball.setAttribute('cx', lerp(a[0], b[0], bu)); fig.ball.setAttribute('cy', lerp(a[1], b[1], bu));
+    const A = d.ball[bi].at, B = d.ball[bk].at;
+    let pos;
+    if (bi === bk || (typeof A === 'string' && A === B)) pos = ballAt(A, j);   // 一直在手上
+    else {
+      // 球的路線同樣用平滑曲線；觸地那一格保持直線進出，反彈才夠利落
+      const BT = d.ball.map(b => b.t), at = d.ball.map(b => ballAt(b.at, j));
+      const floor = n => d.ball[n].at[1] === 'floor';
+      pos = [0, 1].map(c => {
+        const V = at.map(p => p[c]), slope = (V[bk] - V[bi]) / (BT[bk] - BT[bi]);
+        return hermite(BT, V, bi, bu, floor(bi) ? slope : tangent(BT, V, bi), floor(bk) ? slope : tangent(BT, V, bk));
+      });
+    }
+    fig.ball.setAttribute('cx', pos[0]); fig.ball.setAttribute('cy', pos[1]);
   }
   // 目前階段 = 時間上最近的一個有 label 的 key
   const phase = d.keys.filter(k => k.label && k.t <= demoTime + 1e-6).at(-1) ?? d.keys[0];
