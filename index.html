@@ -53,6 +53,18 @@
   input[type=range] { width: 100%; margin: 10px 0 4px; accent-color: var(--accent); }
   .mark-t { font-variant-numeric: tabular-nums; border: 0; background: none; padding: 4px 0; min-height: 0; color: var(--accent); font-weight: 600; }
   .mark-note { flex: 1; min-width: 0; word-break: break-word; }
+  .demo svg { display: block; width: 100%; max-height: 42vh; margin: 4px 0 8px; }
+  .demo svg .near, .demo svg .far, .demo svg .body { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+  .demo svg .near, .demo svg .body { stroke: var(--text); }
+  .demo svg .far { stroke: var(--muted); opacity: .6; }
+  .demo svg .head { fill: var(--card); stroke: var(--text); stroke-width: 3; }
+  .demo svg .ball { fill: var(--accent); }
+  .demo svg .court { stroke: var(--line); stroke-width: 2; fill: none; }
+  .demo svg .rim { stroke: var(--accent); stroke-width: 3; }
+  .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
+  .demo-phase b { margin-right: 6px; }
+  .demo-phases button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
+  details > summary { cursor: pointer; font-weight: 600; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -72,6 +84,19 @@
       <input type="file" id="file" accept="video/*" hidden>
       <p class="hint">建議拍攝全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
       <p class="msg" id="pick-msg" hidden></p>
+      <div id="demo-home" style="margin-top:16px">
+        <div class="demo" id="demo">
+          <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="動作示意動畫"></svg>
+          <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
+          <input type="range" id="demo-seek" min="0" max="0" step="0.01" value="0" aria-label="示範時間軸">
+          <div class="row">
+            <button class="primary" id="demo-play">播放示範</button>
+            <span class="row" id="demo-speeds"></span>
+          </div>
+          <div class="row demo-phases" id="demo-phases" style="margin-top:8px"></div>
+          <p class="hint">示意動畫只表達動作次序與要點，並非真人示範，也不是你的影片分析結果。</p>
+        </div>
+      </div>
     </div>
 
     <h2>我的影片</h2>
@@ -103,6 +128,11 @@
       <button id="next" aria-label="下一格">下一格 ▶</button>
     </div>
     <div class="row" style="margin-top:8px" id="speeds"></div>
+
+    <details class="card" id="lab-demo" style="margin-top:16px">
+      <summary>示範動作</summary>
+      <div id="lab-demo-box"></div>
+    </details>
 
     <h2>時間點筆記</h2>
     <div class="card">
@@ -220,14 +250,15 @@ async function renderHome() {
 const video = $('video');
 let current = null, videoUrl = null;
 
-$('speeds').append(...SPEEDS.map(s => el('button', {
-  textContent: s === 1 ? '正常' : `${s}×`, dataset: { speed: s },
-  onclick: () => setSpeed(s)
-})));
-function setSpeed(s) {
-  video.playbackRate = s;
-  for (const b of $('speeds').children) b.classList.toggle('on', +b.dataset.speed === s);
+// 速度按鈕；回傳用來標示目前速度的函式
+function speedButtons(box, pick) {
+  box.append(...SPEEDS.map(s => el('button', {
+    textContent: s === 1 ? '正常' : `${s}×`, dataset: { speed: s }, onclick: () => pick(s)
+  })));
+  return s => { for (const b of box.children) b.classList.toggle('on', +b.dataset.speed === s); };
 }
+const markSpeed = speedButtons($('speeds'), s => setSpeed(s));
+function setSpeed(s) { video.playbackRate = s; markSpeed(s); }
 
 async function openLab(clip) {
   const blob = await getVideo(clip.id);
@@ -241,6 +272,9 @@ async function openLab(clip) {
   $('lab-meta').textContent = `${clip.name}・${fmtDate(clip.created)}`;
   $('note').value = '';
   renderMarks();
+  $('lab-demo').hidden = !DEMOS[clip.action];
+  $('lab-demo-box').append($('demo'));
+  loadDemo(clip.action);
   $('home').hidden = true; $('lab').hidden = false;
   scrollTo(0, 0);
 }
@@ -250,6 +284,8 @@ function closeLab() {
   video.removeAttribute('src'); video.load();
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = null; current = null;
+  $('demo-home').append($('demo'));
+  loadDemo($('action').value);
   $('lab').hidden = true; $('home').hidden = false;
   renderHome();
 }
@@ -311,6 +347,207 @@ function renderMarks() {
   $('marks-empty').hidden = current.marks.length > 0;
 }
 
+// ---- 動作示範：火柴人示意動畫 ----
+// 每個動作只寫關鍵姿勢，中間自動補間；所有動作共用同一副骨架。
+// 角度（度）：0 = 垂直向下，正數 = 向前（正面視角時為畫面右方）。
+// arms = [前上臂, 前前臂, 後上臂, 後前臂]；legs = [前大腿, 前小腿, 後大腿, 後小腿]。
+// 「前」指靠近鏡頭、深色那一邊（右手持球）；air = 離地高度。
+const BODY = { trunk: 38, head: 13, upper: 19, fore: 18, thigh: 27, shin: 26 };
+const GROUND = 185, BALL_R = 6;
+const P = (x, t, arms, legs, air = 0) => ({ x, t, arms, legs, air });
+const RUN_A = [30, 0, -25, -50], RUN_B = [-25, -50, 30, 0];
+const SET = [160, 150, 135, 165], FOLLOW = [160, 140, 120, 150], LAND = [25, -10, 20, -15];
+
+// keys：{ t 秒, label 階段, cue 要點, pose }；沒有 pose 即維持上一個姿勢。
+// ball：[t, 位置]；'wN' = 前手持球，[x, y] 可用數字、關節名稱（取其座標）或 'floor'。
+const DEMOS = {
+  投籃: { hoop: true, keys: [
+    { t: 0, label: '準備', cue: '雙腳與肩同寬，膝蓋微曲，球放在胸前，眼望籃框。', pose: P(70, 10, [40, 120, 30, 110], [25, -10, 15, -20]) },
+    { t: 0.5, label: '下蹲蓄力', cue: '屈膝降低重心，把球帶到下巴前方，手肘對準籃框。', pose: P(70, 15, [60, 150, 50, 140], [45, -20, 35, -30]) },
+    { t: 0.85, label: '起跳舉球', cue: '雙腳蹬地向上，把球舉到額頭前上方的出手點。', pose: P(70, 3, [140, 180, 130, 170], [5, 0, 0, -5], 8) },
+    { t: 1.05, label: '出手', cue: '接近最高點時伸直手臂、手腕下壓，球從食指與中指離手。', pose: P(70, 3, SET, [2, -2, -2, -8], 14) },
+    { t: 1.4, label: '落地與隨球', cue: '手臂保持伸直、手腕下垂，在起跳位置附近平穩落地。', pose: P(72, 5, FOLLOW, LAND) },
+    { t: 2.4 }
+  ], ball: [[0, 'wN'], [1.05, 'wN'], [1.25, [122, 18]], [1.4, [150, 8]], [1.55, [178, 14]], [1.75, [211, 40]], [1.95, [212, 80]], [2.2, [208, 'floor']]] },
+
+  運球: { keys: [
+    { t: 0, label: '準備姿勢', cue: '屈膝降低重心，上身微向前，抬頭觀察場上。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.2, label: '下壓推球', cue: '用手指和指腹把球向下推，不要用手掌拍球。', pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.32, label: '球觸地反彈', cue: '保持低重心，眼睛不看球。' },
+    { t: 0.45, label: '迎球收回', cue: '球反彈時手掌在上方迎球、順勢緩衝，球不高於腰部。', pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.65, pose: P(100, 20, [15, 15, 50, 70], [35, -15, 10, -25]) },
+    { t: 0.77 },
+    { t: 0.9, pose: P(100, 20, [30, 70, 50, 70], [35, -15, 10, -25]) },
+    { t: 1.3 }
+  ], ball: [[0, 'wN'], [0.2, 'wN'], [0.32, ['wN', 'floor']], [0.45, 'wN'], [0.65, 'wN'], [0.77, ['wN', 'floor']], [0.9, 'wN']] },
+
+  上籃: { hoop: true, keys: [
+    { t: 0, label: '運球推進', cue: '用慣用手在身體前側運球，加速接近籃框。', pose: P(50, 15, [20, 40, -20, 30], RUN_A) },
+    { t: 0.3, pose: P(80, 15, [30, 70, 20, -10], RUN_B) },
+    { t: 0.6, label: '收球・第一步', cue: '右腳踏出的同時雙手收球，把球護在胸前。', pose: P(110, 15, [40, 110, 40, 100], [30, 10, -20, -40]) },
+    { t: 0.85, label: '第二步起跳', cue: '左腳踏地起跳，右膝向上提，把身體帶向籃框。', pose: P(140, 8, [100, 150, 80, 140], [80, 0, 15, 5]) },
+    { t: 1.1, label: '舉球上籃', cue: '在最高點伸直右手，用手腕輕托把球放到籃板方框。', pose: P(168, 8, [165, 170, 120, 150], [85, 10, 5, -10], 25) },
+    { t: 1.45, label: '落地', cue: '雙腳落地、屈膝緩衝，保持平衡。', pose: P(182, 5, [60, 80, 50, 70], [25, -5, 20, -15]) },
+    { t: 2.0 }
+  ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.25, [215, 28]], [1.4, [213, 52]], [1.6, [212, 110]], [1.8, [210, 'floor']]] },
+
+  急停跳投: { hoop: true, keys: [
+    { t: 0, label: '運球推進', cue: '抬頭運球推進，留意與防守者的距離。', pose: P(40, 15, [20, 40, -20, 30], RUN_A) },
+    { t: 0.3, pose: P(68, 15, [30, 70, 20, -10], RUN_B) },
+    { t: 0.55, label: '急停制動', cue: '一二步急停，前腳煞停、屈膝降低重心，上身不要繼續前衝。', pose: P(92, 5, [40, 110, 30, 110], [35, 10, -15, -35]) },
+    { t: 0.8, label: '收球蓄力', cue: '雙腳站穩對準籃框，把球帶到出手點下方。', pose: P(96, 10, [60, 150, 50, 140], [40, -15, 30, -25]) },
+    { t: 1.1, label: '起跳出手', cue: '垂直向上起跳，在最高點伸直手臂出手。', pose: P(96, 3, SET, [2, -2, -2, -8], 14) },
+    { t: 1.45, label: '落地與隨球', cue: '在起跳位置附近落地，身體不要向前飄。', pose: P(98, 5, FOLLOW, LAND) },
+    { t: 2.5 }
+  ], ball: [[0, 'wN'], [0.15, ['wN', 'floor']], [0.3, 'wN'], [1.1, 'wN'], [1.3, [142, 15]], [1.45, [168, 6]], [1.6, [192, 14]], [1.8, [211, 40]], [2.0, [212, 80]], [2.3, [208, 'floor']]] },
+
+  傳球: { keys: [
+    { t: 0, label: '持球於胸前', cue: '雙手持球在胸前，手肘自然向下，眼望傳球目標。', pose: P(80, 8, [30, 120, 25, 115], [15, -5, 10, -10]) },
+    { t: 0.4, label: '跨步', cue: '向傳球方向跨出一步，把力量由腳傳到手。', pose: P(88, 12, [20, 130, 18, 128], [35, 10, -15, -30]) },
+    { t: 0.65, label: '雙手推出', cue: '雙臂向前伸直，手腕外翻，拇指朝下。', pose: P(90, 12, [85, 90, 82, 88], [35, 10, -15, -30]) },
+    { t: 1.0, label: '隨球動作', cue: '手臂保持伸直指向目標，球應該直線飛向隊友胸口。', pose: P(90, 12, [82, 85, 80, 84], [35, 10, -15, -30]) },
+    { t: 1.8 }
+  ], ball: [[0, 'wN'], [0.65, 'wN'], [0.95, [180, 'wN']], [1.2, [262, 'wN']]] },
+
+  防守: { front: true, keys: [
+    { t: 0, label: '防守姿勢', cue: '雙腳比肩寬，屈膝、臀部向後坐，雙手張開。', pose: P(90, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
+    { t: 0.3, label: '領先腳跨出', cue: '移動方向那隻腳先橫向跨出，重心保持低而平。', pose: P(105, 0, [70, 120, -60, -30], [52, 12, -30, 2]) },
+    { t: 0.55, label: '後腳跟上', cue: '後腳推地跟上，雙腳不交叉、不併攏。', pose: P(120, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
+    { t: 0.85, pose: P(135, 0, [70, 120, -60, -30], [52, 12, -30, 2]) },
+    { t: 1.1, pose: P(150, 0, [70, 120, -60, -30], [40, -5, -40, 5]) },
+    { t: 1.4, label: '換方向', cue: '換方向時先降低重心，再由另一隻腳領先跨出。', pose: P(150, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
+    { t: 1.7, pose: P(135, 0, [60, 30, -70, -120], [30, -2, -52, -12]) },
+    { t: 1.95, pose: P(120, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
+    { t: 2.25, pose: P(105, 0, [60, 30, -70, -120], [30, -2, -52, -12]) },
+    { t: 2.5, pose: P(90, 0, [60, 30, -70, -120], [40, -5, -40, 5]) },
+    { t: 2.9 }
+  ], ball: [] }
+};
+for (const d of Object.values(DEMOS)) {
+  d.keys.forEach((k, i) => { k.pose ??= d.keys[i - 1].pose; });
+  d.ball = d.ball.map(([t, at]) => ({ t, at }));
+  d.end = d.keys.at(-1).t;
+}
+
+// 由角度計出各關節座標（正向運動學），再把最低的腳放回地面
+function solve(pose, front) {
+  const go = (p, deg, len) => { const r = deg * Math.PI / 180; return [p[0] + Math.sin(r) * len, p[1] + Math.cos(r) * len]; };
+  const sw = front ? 10 : 0, hw = front ? 7 : 0, up = 180 - pose.t;
+  const [uN, fN, uF, fF] = pose.arms, [tN, sN, tF, sF] = pose.legs;
+  const j = { p: [0, 0], hN: [hw, 0], hF: [-hw, 0] };
+  j.n = go(j.p, up, BODY.trunk); j.h = go(j.n, up, BODY.head);
+  j.sN = [j.n[0] + sw, j.n[1]]; j.sF = [j.n[0] - sw, j.n[1]];
+  j.eN = go(j.sN, uN, BODY.upper); j.wN = go(j.eN, fN, BODY.fore); j.bN = go(j.wN, fN, BALL_R + 1);
+  j.eF = go(j.sF, uF, BODY.upper); j.wF = go(j.eF, fF, BODY.fore); j.bF = go(j.wF, fF, BALL_R + 1);
+  j.kN = go(j.hN, tN, BODY.thigh); j.aN = go(j.kN, sN, BODY.shin);
+  j.kF = go(j.hF, tF, BODY.thigh); j.aF = go(j.kF, sF, BODY.shin);
+  j.tN = [j.aN[0] + (front ? 5 : 8), j.aN[1]]; j.tF = [j.aF[0] + (front ? -5 : 8), j.aF[1]];
+  const dy = GROUND - pose.air - Math.max(j.aN[1], j.aF[1]);
+  for (const k in j) j[k] = [j[k][0] + pose.x, j[k][1] + dy];
+  return j;
+}
+
+function ballAt(at, j) {
+  if (typeof at === 'string') return j['b' + at.slice(1)];
+  const [x, y] = at;
+  return [typeof x === 'string' ? j[x][0] : x,
+    y === 'floor' ? GROUND - BALL_R : typeof y === 'string' ? j[y][1] : y];
+}
+
+const lerp = (a, b, u) => a + (b - a) * u;
+const ease = u => u * u * (3 - 2 * u);
+const lerpPose = (a, b, u) => P(lerp(a.x, b.x, u), lerp(a.t, b.t, u),
+  a.arms.map((v, i) => lerp(v, b.arms[i], u)), a.legs.map((v, i) => lerp(v, b.legs[i], u)), lerp(a.air, b.air, u));
+// 回傳 [前一個 key, 後一個 key, 進度 0–1]
+function seg(list, time) {
+  let i = 0;
+  while (i < list.length - 1 && list[i + 1].t <= time) i++;
+  return i === list.length - 1 ? [i, i, 0] : [i, i + 1, (time - list[i].t) / (list[i + 1].t - list[i].t)];
+}
+
+// SVG 元件只建立一次，每格更新座標
+const SVGNS = 'http://www.w3.org/2000/svg';
+const svgEl = (tag, attrs) => {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  $('demo-svg').append(n);
+  return n;
+};
+svgEl('line', { class: 'court', x1: 0, y1: GROUND + 1, x2: 240, y2: GROUND + 1 });
+const hoop = [
+  svgEl('line', { class: 'court', x1: 228, y1: 15, x2: 228, y2: 58 }),
+  svgEl('polyline', { class: 'court', points: '202,45 206,62 220,62 224,45' }),
+  svgEl('line', { class: 'rim', x1: 200, y1: 45, x2: 226, y2: 45 })
+];
+const fig = {
+  farArm: svgEl('polyline', { class: 'far' }), farLeg: svgEl('polyline', { class: 'far' }),
+  body: svgEl('path', { class: 'body' }), head: svgEl('circle', { class: 'head', r: 8 }),
+  nearLeg: svgEl('polyline', { class: 'near' }), nearArm: svgEl('polyline', { class: 'near' }),
+  ball: svgEl('circle', { class: 'ball', r: BALL_R })
+};
+
+let demo = null, demoTime = 0, demoPlaying = false, demoSpeed = 0.5, demoLast = 0;
+const markDemoSpeed = speedButtons($('demo-speeds'), s => { demoSpeed = s; markDemoSpeed(s); });
+markDemoSpeed(demoSpeed);
+
+function drawDemo() {
+  const d = demo;
+  const [i, k, u] = seg(d.keys, demoTime);
+  const j = solve(lerpPose(d.keys[i].pose, d.keys[k].pose, ease(u)), d.front);
+  const pts = (...names) => names.map(n => j[n].map(v => v.toFixed(1)).join(',')).join(' ');
+  fig.farArm.setAttribute('points', pts('sF', 'eF', 'wF'));
+  fig.farLeg.setAttribute('points', pts('hF', 'kF', 'aF', 'tF'));
+  fig.nearArm.setAttribute('points', pts('sN', 'eN', 'wN'));
+  fig.nearLeg.setAttribute('points', pts('hN', 'kN', 'aN', 'tN'));
+  fig.body.setAttribute('d', `M${pts('hF')} L${pts('hN')} M${pts('p')} L${pts('n')} M${pts('sF')} L${pts('sN')} M${pts('n')} L${pts('h')}`);
+  fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
+  fig.ball.style.display = d.ball.length ? '' : 'none';
+  if (d.ball.length) {
+    const [bi, bk, bu] = seg(d.ball, demoTime);
+    const a = ballAt(d.ball[bi].at, j), b = ballAt(d.ball[bk].at, j);
+    fig.ball.setAttribute('cx', lerp(a[0], b[0], bu)); fig.ball.setAttribute('cy', lerp(a[1], b[1], bu));
+  }
+  // 目前階段 = 時間上最近的一個有 label 的 key
+  const phase = d.keys.filter(k => k.label && k.t <= demoTime + 1e-6).at(-1) ?? d.keys[0];
+  $('demo-label').textContent = phase.label;
+  $('demo-cue').textContent = phase.cue;
+  for (const b of $('demo-phases').children) b.classList.toggle('on', +b.dataset.t === phase.t);
+  $('demo-seek').value = demoTime;
+}
+
+function loadDemo(action) {
+  pauseDemo();
+  demo = DEMOS[action];
+  $('demo').hidden = !demo;
+  if (!demo) return;
+  for (const n of hoop) n.style.display = demo.hoop ? '' : 'none';
+  $('demo-seek').max = demo.end;
+  $('demo-phases').replaceChildren(...demo.keys.filter(k => k.label).map(k => el('button', {
+    textContent: k.label, dataset: { t: k.t }, onclick: () => { pauseDemo(); demoTime = k.t; drawDemo(); }
+  })));
+  demoTime = 0;
+  drawDemo();
+}
+
+function tickDemo(now) {
+  if (!demoPlaying) return;
+  demoTime += Math.max(0, now - demoLast) / 1000 * demoSpeed;  // 首格的時間戳可能早於 performance.now()
+  demoLast = now;
+  if (demoTime > demo.end) demoTime = 0;
+  drawDemo();
+  requestAnimationFrame(tickDemo);
+}
+function pauseDemo() { demoPlaying = false; $('demo-play').textContent = '播放示範'; }
+$('demo-play').onclick = () => {
+  if (demoPlaying) return pauseDemo();
+  demoPlaying = true; demoLast = performance.now();
+  $('demo-play').textContent = '暫停';
+  requestAnimationFrame(tickDemo);
+};
+$('demo-seek').oninput = e => { pauseDemo(); demoTime = +e.target.value; drawDemo(); };
+$('action').onchange = () => loadDemo($('action').value);
+
+loadDemo($('action').value);
 renderHome();
 </script>
 </body>
