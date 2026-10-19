@@ -80,6 +80,7 @@
   button.small { min-height: 36px; padding: 6px 12px; font-size: 14px; white-space: nowrap; }
   .compare { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; align-items: center; }
   #cmp-demo svg { margin: 0; max-height: 60vh; }
+  #pov { display: block; width: 100%; aspect-ratio: 6 / 5; background: var(--card); border-radius: 8px; }
   .seg { gap: 4px; flex-wrap: nowrap; }
   .seg button { padding: 4px 8px; min-height: 32px; font-size: 12px; white-space: nowrap; }
   .seg .meta { font-size: 12px; }
@@ -129,8 +130,12 @@
         <canvas id="overlay"></canvas>
       </div>
       <div class="demo" id="cmp-demo">
-        <div class="row seg"><span class="meta grow">火柴人複製你的動作</span><button id="demo-dots">關節點</button></div>
+        <div class="row seg">
+          <button id="view-side" class="on" title="側面火柴人">側面</button><button id="view-pov" title="模擬球員眼中所見">第一身</button>
+          <span class="grow"></span><button id="demo-dots">關節點</button>
+        </div>
         <svg id="demo-svg" viewBox="0 0 240 200" role="img" aria-label="火柴人複製影片中的動作"></svg>
+        <canvas id="pov" hidden aria-label="模擬第一身視角"></canvas>
         <p class="demo-phase"><b id="demo-label"></b><span id="demo-cue"></span></p>
       </div>
     </div>
@@ -1141,7 +1146,9 @@ function showAnalysis(A) {
   $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A || !!current?.sample;
   if (!A) { $('ana-status').textContent = ANA_HINT; updateRight(); renderBreakdown(); drawOverlay(); return; }
   prepare(A);
-  updateRight();
+  $('view-pov').disabled = !A.pov;
+  $('view-pov').title = A.pov ? '模擬球員眼中所見' : '雙人模式沒有 3D 座標，未能提供第一身視角';
+  setView(A.pov ? viewMode : 'side');
   renderBreakdown();
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
@@ -1508,6 +1515,7 @@ function prepare(A) {
   A.view ??= cameraView(A);
   A.ball ??= A.role === 'defender' ? A.frames.map(() => null) : inferBall(A);   // 球只跟持球者
   A.mimic ??= buildMimic(A);
+  A.pov ??= buildPov(A);   // 第一身視角（只有單人 3D 分析才有）
   A.side ??= shootingSide(A);
   A.checks ??= A.events.map(e => assess(A, e));
   return A;
@@ -1784,6 +1792,115 @@ function drawOther(t) {
   if (!O?.mimic || !O.frames[frameIndex(t)].pose) return hideFigure(fig2);
   drawFigure(mimicAt(O.mimic, t).j, null, false, fig2);
 }
+// ---- 第一身視角（模擬）----
+// 影片是側面拍的，沒有球員眼中的真實畫面，所以用 3D 骨架模擬：鏡頭放在雙眼位置、向鼻尖方向望，
+// 畫出自己的手、腳、籃球，再加地板網格和一個虛擬籃框（放在球員面向的方向，假設 4.6 米、籃框高 3.05 米）。
+// 只用單人分析的 3D 座標（MediaPipe 世界座標：米、以臀部為原點、y 向下、z 向遠離鏡頭）；雙人模式沒有 3D，不提供。
+const POV_HOOP_DIST = 4.6, POV_RIM_H = 3.05, POV_RIM_R = 0.23, POV_FOV = 100;
+let viewMode = 'side';   // 'side' = 側面火柴人；'pov' = 第一身
+
+function buildPov(A) {
+  if (A.twoD || !A.mimic) return null;
+  const F = A.frames, n = F.length;
+  const raw = F.map(f => f.world && f.pose ? f.world : null);
+  if (raw.filter(Boolean).length < n * 0.3) return null;
+  // 每個座標的時間序列先補洞、平滑（同火柴人）
+  const cols = Array.from({ length: 33 * 3 }, (_, c) => fillSmooth(raw.map(w => w ? w[c] : null), 1.5));
+  const at = (i, j) => [cols[j * 3][i], cols[j * 3 + 1][i], cols[j * 3 + 2][i]];
+  const mid = (a, b) => a.map((v, k) => (v + b[k]) / 2);
+  // 跳起高度：世界座標以臀部為原點，看不到跳起，所以借用火柴人（已處理鏡頭移動）的腳離地高度，換算成米（鼻至腳踝約 1.6 米）
+  const M = A.mimic, footSvg = i => Math.max(...['aN', 'aF', 'lN', 'lF', 'oN', 'oF'].map(k => M.pts[k][i][1]));
+  const gaps = Array.from({ length: n }, (_, i) => GROUND - footSvg(i)), base = [...gaps].sort((a, b) => a - b)[n >> 1];
+  const lift = gaps.map(g => Math.max(0, g - base) * 1.6 / MIMIC_HEIGHT);
+  // 籃框方向：全片面向（耳朵中間 → 鼻尖）水平方向的中位數
+  const face = Array.from({ length: n }, (_, i) => sub(at(i, 0), mid(at(i, 7), at(i, 8))));
+  const med = k => face.map(v => v[k]).sort((a, b) => a - b)[n >> 1];
+  let hx = med(0), hz = med(2); const hl = Math.hypot(hx, hz) || 1; hx /= hl; hz /= hl;
+  // 籃球 3D 位置：拿着時放在最近那隻手；在空中、運球時用畫面上相對臀部的位置換算成米，前後距離沿用最後拿着時
+  const ballPts = [];
+  let lastZ = 0;
+  for (let i = 0; i < n; i++) {
+    const b = A.ball[i], p = F[i].pose;
+    if (!b || !p) { ballPts.push(null); continue; }
+    const hands = [at(i, 19), at(i, 20)], img = j => [p[j * 4] * A.w, p[j * 4 + 1] * A.h];
+    const near = [19, 20].map(j => Math.hypot(b[0] * A.w - img(j)[0], b[1] * A.h - img(j)[1]));
+    const bodyPx = Math.max(Math.max(p[27 * 4 + 1], p[28 * 4 + 1]) - p[1], 0.05) * A.h, m = 1.6 / bodyPx;
+    if (b[3] === BALL_HELD || Math.min(...near) < bodyPx * 0.15) {
+      // 球心在手掌外面：沿前臂方向（手肘 → 食指）再出 0.12 米，舉到額前時球在手上方，抱在胸前時球在手前面
+      const k = near[0] <= near[1] ? 0 : 1, hnd = hands[k], dir = sub(hnd, at(i, 13 + k)), dl = Math.hypot(...dir) || 1;
+      const c = hnd.map((v, q) => v + dir[q] / dl * 0.12);
+      ballPts.push(c); lastZ = c[2];
+    } else {
+      const hip = mid(img(23), img(24));
+      ballPts.push(Object.assign([(b[0] * A.w - hip[0]) * m, (b[1] * A.h - hip[1]) * m, lastZ], { air: true }));
+    }
+  }
+  return { at, n, fps: A.fps, lift, hoop: [hx, hz], ball: ballPts, face };
+}
+
+function drawPov(t) {
+  const P = analysis.pov, c = $('pov'), ctx = c.getContext('2d');
+  const [W, H] = fitCanvas(c, ctx), css = getComputedStyle(document.body);
+  const fi = Math.min(Math.max(t * P.fps, 0), P.n - 1), i = Math.floor(fi), k = Math.min(i + 1, P.n - 1), u = fi - i;
+  const lerp3 = (a, b) => a.map((v, q) => v + (b[q] - v) * u);
+  const pt = j => lerp3(P.at(i, j), P.at(k, j));
+  const mid = (a, b) => a.map((v, q) => (v + b[q]) / 2);
+  const norm = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  // 鏡頭：雙眼中間；方向：耳朵中間 → 雙眼中間（大致是平視的視線，包括抬頭、低頭；耳朵→鼻尖會偏向下）
+  const eye = mid(pt(2), pt(5)), f = norm(sub(eye, mid(pt(7), pt(8))));
+  const r = norm(cross(f, [0, -1, 0])), up = cross(r, f);
+  const focal = W / 2 / Math.tan(POV_FOV / 2 * Math.PI / 180);
+  const proj = p => { const d = sub(p, eye), z = dot(d, f); return z < 0.05 ? null : [W / 2 + focal * dot(d, r) / z, H / 2 - focal * dot(d, up) / z]; };
+  const poly = (pts, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
+    let pen = false;
+    for (const p of pts) { const s = p && proj(p); if (!s) { pen = false; continue; } ctx[pen ? 'lineTo' : 'moveTo'](...s); pen = true; }
+    ctx.stroke();
+  };
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // 地板：最低那隻腳之下，再加跳起高度
+  const floor = Math.max(...[27, 28, 29, 30, 31, 32].map(j => pt(j)[1])) + P.lift[i] + (P.lift[k] - P.lift[i]) * u;
+  const line = css.getPropertyValue('--line'), text = css.getPropertyValue('--text'), muted = css.getPropertyValue('--muted'), accent = css.getPropertyValue('--accent');
+  for (let g = -8; g <= 8; g += 1) {
+    poly(Array.from({ length: 33 }, (_, q) => [g, floor, -8 + q / 2]), line, 1);
+    poly(Array.from({ length: 33 }, (_, q) => [-8 + q / 2, floor, g]), line, 1);
+  }
+  // 虛擬籃框：在面向方向 4.6 米、高 3.05 米；籃板在籃框後面
+  const [hx, hz] = P.hoop, side = [-hz, 0, hx];
+  const rim = [hx * POV_HOOP_DIST, floor - POV_RIM_H, hz * POV_HOOP_DIST];
+  poly(Array.from({ length: 25 }, (_, q) => { const a = q / 24 * 2 * Math.PI; return [rim[0] + Math.cos(a) * POV_RIM_R, rim[1], rim[2] + Math.sin(a) * POV_RIM_R]; }), accent, 3);
+  const bc = [rim[0] + hx * 0.38, 0, rim[2] + hz * 0.38], corner = (s, h) => [bc[0] + side[0] * s, floor - h, bc[2] + side[2] * s];
+  poly([corner(-0.9, 2.9), corner(0.9, 2.9), corner(0.9, 3.95), corner(-0.9, 3.95), corner(-0.9, 2.9)], muted, 2);
+  poly([[rim[0] + hx * 0.38, floor, rim[2] + hz * 0.38], corner(0, 2.9)], muted, 2);   // 籃架
+  // 自己的身體：手臂（含手掌）、身體、腳
+  for (const [s, e, w, ix] of [[11, 13, 15, 19], [12, 14, 16, 20]]) poly([pt(s), pt(e), pt(w), pt(ix)], text, 4);
+  poly([pt(11), pt(12)], text, 3); poly([pt(23), pt(24)], text, 3);
+  for (const [h0, kn, an, toe] of [[23, 25, 27, 31], [24, 26, 28, 32]]) poly([pt(h0), pt(kn), pt(an), pt(toe)], muted, 3);
+  // 籃球（半徑約 0.12 米）
+  const b0 = P.ball[i], b1 = P.ball[k], b = b0 && b1 ? lerp3(b0, b1) : b0 ?? b1, s = b && proj(b);
+  const z = s && dot(sub(b, eye), f);
+  // 空中的球前後距離只是推算，太貼近眼睛（< 0.4 米）就不畫，免得一個大波擋住畫面；大小亦設上限
+  if (s && !((b0?.air || b1?.air) && z < 0.4)) {
+    ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(s[0], s[1], Math.min(W * 0.25, Math.max(3, focal * 0.12 / z)), 0, 7); ctx.fill();
+  }
+  // 視線中心
+  ctx.strokeStyle = muted; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W / 2 - 6, H / 2); ctx.lineTo(W / 2 + 6, H / 2); ctx.moveTo(W / 2, H / 2 - 6); ctx.lineTo(W / 2, H / 2 + 6); ctx.stroke();
+}
+
+function setView(m) {
+  viewMode = m;
+  const pov = m === 'pov' && !!analysis?.pov;
+  $('pov').hidden = !pov; $('demo-svg').style.display = pov ? 'none' : '';
+  $('view-side').classList.toggle('on', !pov); $('view-pov').classList.toggle('on', pov);
+  $('demo-dots').disabled = pov;
+  updateRight();
+}
+$('view-side').onclick = () => setView('side');
+$('view-pov').onclick = () => setView('pov');
+
 function drawMimic(t) {
   const A = analysis;
   drawOther(t);
@@ -1793,10 +1910,13 @@ function drawMimic(t) {
     $('demo-cue').textContent = '';
     return;
   }
-  const { j } = mimicAt(A.mimic, t);
-  // 籃球跟持球者（雙人時看的是防守者也一樣畫出球）
-  const { ball, inferred } = mimicAt((dual ? dual.persons[dual.handler] : A).mimic, t);
-  drawFigure(j, ball, inferred);
+  if (viewMode === 'pov' && A.pov) drawPov(t);
+  else {
+    const { j } = mimicAt(A.mimic, t);
+    // 籃球跟持球者（雙人時看的是防守者也一樣畫出球）
+    const { ball, inferred } = mimicAt((dual ? dual.persons[dual.handler] : A).mimic, t);
+    drawFigure(j, ball, inferred);
+  }
   const out = t > A.frames.at(-1).t + 1 / A.fps;
   const ev = A.events.filter(e => A.frames[e.i].t <= t + 1e-3).at(-1);
   $('demo-label').textContent = out ? '這段時間未有分析' : ev ? eventName(A, ev) : '準備';
