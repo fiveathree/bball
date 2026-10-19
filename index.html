@@ -71,7 +71,10 @@
   .demo svg .court { stroke: var(--line); stroke-width: 2; fill: none; }
   .demo-phase { margin: 0; min-height: 3em; font-size: 15px; }
   .demo-phase b { margin-right: 6px; }
-  #speed { min-width: 64px; }
+  #speed { min-width: 52px; }
+  .controls { gap: 6px; flex-wrap: nowrap; }
+  .controls button { padding: 8px; min-width: 36px; }
+  #clip-select { flex: 1; min-width: 0; padding: 8px 4px; font-size: 14px; text-overflow: ellipsis; }
   .top { flex-wrap: nowrap; align-items: center; margin-bottom: 16px; }   /* 上傳影片掣與下方關節點掣之間留空位 */
   .top h1 { margin: 0; }
   button.small { min-height: 36px; padding: 6px 12px; font-size: 14px; white-space: nowrap; }
@@ -136,12 +139,13 @@
       <span class="time" id="time">0.00 / 0.00 秒</span>
     </div>
 
-    <div class="row" style="margin-top:10px">
+    <div class="row controls" style="margin-top:10px">
       <button id="first" aria-label="回到第一格" title="回到第一格">⏮</button>
       <button id="prev" aria-label="上一格" title="上一格">◀</button>
       <button class="primary" id="play">播放</button>
       <button id="speed" aria-label="播放速度（按一下切換）" title="播放速度（按一下切換）">0.5×</button>
       <button id="next" aria-label="下一格" title="下一格">▶</button>
+      <select id="clip-select" aria-label="選擇影片"></select>
     </div>
     <div class="row" id="del-row" style="justify-content:flex-end;margin-top:6px">
       <button class="link danger" id="del">刪除這段影片</button>
@@ -177,11 +181,6 @@
     </div>
   </section>
 
-  <h2>我的影片</h2>
-  <div class="card">
-    <ul class="list" id="clips"></ul>
-  </div>
-
   <footer class="hint" style="margin-top:24px">
     <p>建議從側面拍攝、全身入鏡、光線充足、長度 60 秒以內。影片只儲存在這部裝置的瀏覽器內，不會上傳。</p>
     <p id="credit"></p>
@@ -190,7 +189,7 @@
 </main>
 <script>
 // ---- 可調常數 ----
-const SPEEDS = [0.25, 0.5, 1];
+const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 const FRAME = 1 / 30;            // 逐格步長（秒）；以 30fps 計
 const MAX_MB = 300;              // 單一影片大小上限
 const MAX_SEC = 120;             // 單一影片長度上限
@@ -287,10 +286,10 @@ async function importVideo(f) {
 // 第一條（首頁預設）：側面拍攝的真人跳投；第二條：一對一，持球者換手運球、防守者貼身防守（雙人分析）。
 const SAMPLES = [
   { id: 'sample', sample: true, file: 'samples/jumpshot-side.mp4', analysis: 'samples/jumpshot-side.json',
-    name: '示範片：跳投', duration: 21.553333, marks: [],
+    name: '跳投示範', duration: 21.553333, marks: [],
     credit: '跳投示範片：PNW Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/' },
   { id: 'sample-crossover', sample: true, file: 'samples/crossover.mp4', analysis: 'samples/crossover.json',
-    name: '示範片：一對一', duration: 15.6, marks: [],
+    name: '一對一示範', duration: 15.6, marks: [],
     credit: '一對一示範片：Kampus Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-practicing-defense-in-basketball-6249627/' }
 ];
 const SAMPLE = SAMPLES[0];   // 首頁預設，亦是數值比較的參考
@@ -318,21 +317,17 @@ async function renderList() {
   // 舊版「用示範片試試」曾把示範片複製進影片庫，現在示範片固定在首頁，刪走這些副本釋放空間
   for (const c of all) if (c.sample && !SAMPLES.some(x => x.id === c.id)) await deleteClip(c.id);
   const clips = all.filter(c => !c.sample).sort((a, b) => b.created - a.created);
-  $('clips').replaceChildren(...[...SAMPLES, ...clips].map(c => el('li', {}, [
-    el('button', { className: 'clip-open', onclick: () => { openLab(c); scrollTo(0, 0); } }, [
-      el('b', { textContent: `${c.name}${current?.id === c.id ? '（顯示中）' : ''}` }),
-      el('span', { className: 'meta', textContent: c.sample
-        ? `${c.credit}・${c.marks.length} 個筆記`
-        : `${fmtDate(c.created)}・${fmt(c.duration)} 秒・${c.marks.length} 個筆記` })
-    ])
-  ])));
+  // 影片選擇：下拉清單（在「下一格」右邊），示範片排先，之後是自己上載的影片（新的在前）
+  const list = [...SAMPLES, ...clips];
+  $('clip-select').replaceChildren(...list.map(c => el('option', { value: c.id, textContent: c.name, selected: current?.id === c.id })));
+  $('clip-select').onchange = e => { const c = list.find(x => x.id === e.target.value); if (c) openLab(c); };
 }
 
 // ---- 檢視 ----
 const video = $('video');
 let current = null, videoUrl = null;
 
-// 速度：一個按鈕，按一下循環切換 0.25× → 0.5× → 正常
+// 速度：一個按鈕，按一下循環切換 0.25× → 0.5× → 正常 → 1.5× → 2×
 function setSpeed(s) { video.playbackRate = s; $('speed').textContent = s === 1 ? '正常' : `${s}×`; }
 $('speed').onclick = () => setSpeed(SPEEDS[(SPEEDS.indexOf(video.playbackRate) + 1) % SPEEDS.length]);
 
