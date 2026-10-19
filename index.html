@@ -62,7 +62,8 @@
   .demo svg .far { stroke: var(--muted); opacity: .6; }
   .demo svg .head { fill: var(--card); stroke: var(--text); stroke-width: 3; }
   .demo svg .ball { fill: var(--accent); }
-  .demo svg .ball.inferred { opacity: .5; }   /* 看不到、推斷出來的位置 */
+  .demo svg .ball.inferred { opacity: .5; }
+  .demo svg .other { stroke: var(--muted); opacity: .45; }   /* 雙人時另一名球員 */   /* 看不到、推斷出來的位置 */
   .demo svg .face { stroke-width: 2.5; }
   .demo svg .near, .demo svg .far { stroke-width: 3.5; }
   .demo svg .dot { display: none; fill: var(--accent); stroke: var(--card); stroke-width: .6; }
@@ -282,26 +283,31 @@ async function importVideo(f) {
   $('ana-run').click();
 }
 
-// 示範片（首頁預設）：側面拍攝的真人跳投，與火柴人同一角度；Pexels 授權，來源見 samples/README.md。
-// 全片分析結果已預先計好（samples/jumpshot-side.json），打開即可同步，不用等。
-const SAMPLE = {
-  id: 'sample', sample: true, file: 'samples/jumpshot-side.mp4', analysis: 'samples/jumpshot-side.json',
-  name: '示範片', duration: 21.553333, marks: [],
-  credit: '影片來源：PNW Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/'
-};
-let sampleData = null;
-async function sampleAnalysis() {
-  if (!sampleData) {
+// 示範片：Pexels 授權，來源見 samples/README.md。分析結果已預先計好（samples/*.json），打開即可同步，不用等。
+// 第一條（首頁預設）：側面拍攝的真人跳投；第二條：一對一，持球者換手運球、防守者貼身防守（雙人分析）。
+const SAMPLES = [
+  { id: 'sample', sample: true, file: 'samples/jumpshot-side.mp4', analysis: 'samples/jumpshot-side.json',
+    name: '示範片：跳投', duration: 21.553333, marks: [],
+    credit: '跳投示範片：PNW Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-wearing-sportswear-playing-basketball-8979052/' },
+  { id: 'sample-crossover', sample: true, file: 'samples/crossover.mp4', analysis: 'samples/crossover.json',
+    name: '示範片：一對一', duration: 15.6, marks: [],
+    credit: '一對一示範片：Kampus Production（Pexels）', creditUrl: 'https://www.pexels.com/video/man-practicing-defense-in-basketball-6249627/' }
+];
+const SAMPLE = SAMPLES[0];   // 首頁預設，亦是數值比較的參考
+const sampleCache = {};
+async function sampleAnalysis(clip = SAMPLE) {
+  if (!sampleCache[clip.id]) {
     try {
-      const j = await fetch(SAMPLE.analysis).then(r => r.json());
+      const j = await fetch(clip.analysis).then(r => r.json());
       const f32 = a => a && Float32Array.from(a);
-      j.frames = j.frames.map(f => ({ t: f.t, pose: f32(f.pose), world: f32(f.world), lh: f32(f.lh), rh: f32(f.rh), face: null, balls: f.balls }));
-      sampleData = j;
+      j.frames = j.frames.map(f => ({ t: f.t, pose: f32(f.pose), world: f32(f.world), lh: f32(f.lh), rh: f32(f.rh), face: null, balls: f.balls,
+        people: f.people && f.people.map(p => p && { pose: f32(p.pose), world: f32(p.world) }) }));
+      sampleCache[clip.id] = j;
     } catch (err) {
       return null;   // 載入失敗就讓用戶自行分析
     }
   }
-  return sampleData;
+  return sampleCache[clip.id];
 }
 const clipVideo = clip => clip.sample
   ? fetch(clip.file).then(r => r.ok ? r.blob() : null).catch(() => null)
@@ -310,9 +316,9 @@ const clipVideo = clip => clip.sample
 async function renderList() {
   const all = await listClips();
   // 舊版「用示範片試試」曾把示範片複製進影片庫，現在示範片固定在首頁，刪走這些副本釋放空間
-  for (const c of all) if (c.sample && c.id !== SAMPLE.id) await deleteClip(c.id);
+  for (const c of all) if (c.sample && !SAMPLES.some(x => x.id === c.id)) await deleteClip(c.id);
   const clips = all.filter(c => !c.sample).sort((a, b) => b.created - a.created);
-  $('clips').replaceChildren(...[SAMPLE, ...clips].map(c => el('li', {}, [
+  $('clips').replaceChildren(...[...SAMPLES, ...clips].map(c => el('li', {}, [
     el('button', { className: 'clip-open', onclick: () => { openLab(c); scrollTo(0, 0); } }, [
       el('b', { textContent: `${c.name}${current?.id === c.id ? '（顯示中）' : ''}` }),
       el('span', { className: 'meta', textContent: c.sample
@@ -345,7 +351,7 @@ async function openLab(clip) {
   $('del-row').hidden = !!clip.sample;
   $('note').value = '';
   renderMarks();
-  showAnalysis(clip.sample ? await sampleAnalysis() : await getAnalysis(clip.id));
+  showAnalysis(clip.sample ? await sampleAnalysis(clip) : await getAnalysis(clip.id));
   renderList();
 }
 
@@ -417,6 +423,14 @@ const svgEl = (tag, attrs) => {
   return n;
 };
 svgEl('line', { class: 'court', x1: 0, y1: GROUND + 1, x2: 240, y2: GROUND + 1 });
+// 雙人時的另一名球員：淡色，畫在後面
+const fig2 = {
+  farArm: svgEl('path', { class: 'far other' }), farLeg: svgEl('path', { class: 'far other' }),
+  body: svgEl('path', { class: 'body other' }), head: svgEl('circle', { class: 'head other', r: 8 }),
+  nose: svgEl('path', { class: 'body face other' }),
+  nearLeg: svgEl('path', { class: 'near other' }), nearArm: svgEl('path', { class: 'near other' }),
+  ball: svgEl('circle', { class: 'ball', r: BALL_R })
+};
 const fig = {
   farArm: svgEl('path', { class: 'far' }), farLeg: svgEl('path', { class: 'far' }),
   body: svgEl('path', { class: 'body' }), head: svgEl('circle', { class: 'head', r: 8 }),
@@ -442,17 +456,17 @@ function figurePaths(j) {
     nose: j.nose ? line('ns', 'nose') : ''
   };
 }
-function drawFigure(j, ball, inferred) {
-  const d = figurePaths(j);
-  for (const k of PATHS) fig[k].setAttribute('d', d[k]);
-  fig.head.setAttribute('cx', j.h[0]); fig.head.setAttribute('cy', j.h[1]);
-  DOTS.forEach((n, x) => { dots[x].setAttribute('cx', j[n][0]); dots[x].setAttribute('cy', j[n][1]); });
-  for (const n of [...Object.values(fig), ...dots]) n.style.visibility = '';
-  fig.ball.style.display = ball ? '' : 'none';
-  if (ball) { fig.ball.setAttribute('cx', ball[0]); fig.ball.setAttribute('cy', ball[1]); }
-  fig.ball.classList.toggle('inferred', !!inferred);
+function drawFigure(j, ball, inferred, F = fig) {
+  const d = figurePaths(j), extra = F === fig ? dots : [];
+  for (const k of PATHS) F[k].setAttribute('d', d[k]);
+  F.head.setAttribute('cx', j.h[0]); F.head.setAttribute('cy', j.h[1]);
+  if (F === fig) DOTS.forEach((n, x) => { dots[x].setAttribute('cx', j[n][0]); dots[x].setAttribute('cy', j[n][1]); });
+  for (const n of [...Object.values(F), ...extra]) n.style.visibility = '';
+  F.ball.style.display = ball ? '' : 'none';
+  if (ball) { F.ball.setAttribute('cx', ball[0]); F.ball.setAttribute('cy', ball[1]); }
+  F.ball.classList.toggle('inferred', !!inferred);
 }
-function hideFigure() { for (const n of [...Object.values(fig), ...dots]) n.style.visibility = 'hidden'; }
+function hideFigure(F = fig) { for (const n of [...Object.values(F), ...(F === fig ? dots : [])]) n.style.visibility = 'hidden'; }
 // 定格小圖（動作拆解用），畫面裁到火柴人附近
 function figureSvg(j, ball, inferred) {
   const d = figurePaths(j), xs = DOTS.map(n => j[n][0]), ys = DOTS.map(n => j[n][1]);
@@ -493,9 +507,9 @@ async function loadModels(status) {
   const vision = await import(`${MP_URL}/vision_bundle.mjs`);
   const files = await vision.FilesetResolver.forVisionTasks(`${MP_URL}/wasm`);
   // 優先用 GPU，不支援時改用 CPU
-  const create = async (Task, opts) => {
+  const create = async (Task, opts, runningMode = 'VIDEO') => {
     for (const delegate of ['GPU', 'CPU']) {
-      try { return await Task.createFromOptions(files, { ...opts, runningMode: 'VIDEO', baseOptions: { ...opts.baseOptions, delegate } }); }
+      try { return await Task.createFromOptions(files, { ...opts, runningMode, baseOptions: { ...opts.baseOptions, delegate } }); }
       catch (err) { if (delegate === 'CPU') throw err; }
     }
   };
@@ -505,7 +519,9 @@ async function loadModels(status) {
   const ball = await create(vision.ObjectDetector, {
     baseOptions: { modelAssetPath: BALL_MODEL }, categoryAllowlist: ['sports ball'], scoreThreshold: 0.2, maxResults: 3
   });
-  return (mp = { holistic, ball });
+  // 數人數用（單張畫面模式，不用時間戳）
+  const people = await create(vision.ObjectDetector, { baseOptions: { modelAssetPath: BALL_MODEL }, categoryAllowlist: ['person'], scoreThreshold: 0.5, maxResults: 4 }, 'IMAGE');
+  return (mp = { holistic, ball, people });
 }
 
 // 關節座標壓成 Float32Array 儲存（每點 x, y, z，身體另加可見度）
@@ -525,24 +541,160 @@ function packFrame(t, h, balls) {
 
 // 籃球在全畫面只得幾個像素，所以先按身體位置裁出球員附近（頭頂上方留多些位置看球路）再偵測。
 // 回傳裁切範圍（像素）；未辨識到身體時沿用上一格。
-function playerCrop(pose, W, H, last) {
-  if (!pose) return last ?? { x: 0, y: 0, s: Math.min(W, H) };
+function playerCrop(poses, W, H, last) {
   let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
-  for (let i = 0; i < 33; i++) {
+  for (const pose of [poses].flat().filter(Boolean)) for (let i = 0; i < 33; i++) {   // 雙人時包住兩人
     if (pose[i * 4 + 3] < MIN_VIS) continue;
     x0 = Math.min(x0, pose[i * 4]); x1 = Math.max(x1, pose[i * 4]);
     y0 = Math.min(y0, pose[i * 4 + 1]); y1 = Math.max(y1, pose[i * 4 + 1]);
   }
   if (x1 <= x0) return last ?? { x: 0, y: 0, s: Math.min(W, H) };
-  const s = Math.min(Math.max((y1 - y0) * H * 2.4, 320), W, H);
+  const s = Math.min(Math.max((y1 - y0) * H * 2.4, (x1 - x0) * W * 1.3, 320), W, H);
   return {
     x: Math.min(Math.max((x0 + x1) / 2 * W - s / 2, 0), W - s),
     y: Math.min(Math.max(y0 * H - s * 0.45, 0), H - s), s
   };
 }
 
+const seekTo = async (v, t) => { if (Math.abs(v.currentTime - t) > 1e-4) await new Promise(r => { v.onseeked = r; v.currentTime = t; }); };
+
+// 數人數：兩名球員經常前後重疊、被當成一個人，所以 16 格中有兩格或以上清楚分開兩名夠大的人（高度 ≥ 畫面四分之一）就算雙人。
+// 回傳兩人分得最開的一格作為追蹤起點；不是雙人回傳 null。
+async function findTwoPeople(v, people, dur) {
+  let best = null, hits = 0;
+  for (let q = 0; q < 16; q++) {
+    const t = dur * (q + 0.5) / 16;
+    await seekTo(v, t);
+    const boxes = people.detect(v).detections.map(d => d.boundingBox).filter(b => b.height >= v.videoHeight * 0.25);
+    if (boxes.length < 2) continue;
+    hits++;
+    const [a, b] = boxes, sep = Math.abs(a.originX + a.width / 2 - b.originX - b.width / 2);
+    if (!best || sep > best.sep) best = { t, boxes: [a, b], sep };
+  }
+  return hits >= 2 ? best : null;
+}
+
+// ---- 雙人：MoveNet MultiPose（TensorFlow.js）----
+// MediaPipe 的身體模型一次只認一個人，兩人重疊時第二人的方框會被當成同一人刪走。MoveNet MultiPose 先找出畫面中所有關節點、
+// 再分給不同的人，對抗、重疊時仍分得開。每人 17 點（沒有手指、腳跟、腳尖）、沒有 3D 座標，所以雙人模式的角度按畫面 2D 計算。
+// 只在畫面中有兩名球員時才下載（TensorFlow.js 約 1.4 MB＋模型約 4.7 MB；沒有 WebGL 時另加 WebAssembly 約 1 MB）。
+const TFJS_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
+const TFJS_WASM = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/';   // 沒有 WebGL 時用 WebAssembly（比純 CPU 快約 25 倍）
+const MOVENET_URL = 'https://tfhub.dev/google/tfjs-model/movenet/multipose/lightning/1';
+// MoveNet 17 點 → MediaPipe 33 點的索引；其餘點用最近的點代替、可見度 0（不會用來計算或畫在影片上）
+const MOVENET_TO_MP = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const MP_STAND_IN = { 1: 0, 3: 0, 4: 0, 6: 0, 9: 0, 10: 0, 17: 15, 19: 15, 21: 15, 18: 16, 20: 16, 22: 16, 29: 27, 31: 27, 30: 28, 32: 28 };
+const MOVENET_MIN = 0.25;      // 人的分數低於此值不要
+const FILL_MAX = 0.5;          // 被擋住不超過 0.5 秒就用前後格補上
+let movenet = null;
+async function loadMoveNet(status) {
+  if (movenet) return movenet;
+  status('下載雙人身體模型（約 6 MB）…');
+  const script = src => new Promise((res, rej) => document.head.append(Object.assign(document.createElement('script'), { src, onload: res, onerror: () => rej(new Error('無法載入雙人身體模型')) })));
+  if (!window.tf) await script(TFJS_URL);
+  // 優先用 GPU（WebGL），不行就用 WebAssembly，最後才用純 CPU
+  if (!await tf.setBackend('webgl').catch(() => false)) {
+    try { await script(TFJS_WASM + 'tf-backend-wasm.min.js'); tf.wasm.setWasmPaths(TFJS_WASM); if (!await tf.setBackend('wasm')) throw 0; }
+    catch (err) { await tf.setBackend('cpu'); }
+  }
+  await tf.ready();
+  return (movenet = await tf.loadGraphModel(MOVENET_URL, { fromTFHub: true }));
+}
+// 一格畫面中的所有人，轉成 MediaPipe 格式：pose（33×4，畫面比例＋可見度）、world（33×3，畫面像素 ÷ 1000，z = 0）
+function moveNetPeople(model, v) {
+  const W = v.videoWidth, H = v.videoHeight, w = 512, h = Math.max(32, Math.round(512 * H / W / 32) * 32);
+  const out = tf.tidy(() => model.predict(tf.image.resizeBilinear(tf.browser.fromPixels(v), [h, w]).cast('int32').expandDims(0)).arraySync()[0]);
+  return out.filter(p => p[55] >= MOVENET_MIN).map(p => {
+    const pose = new Float32Array(33 * 4), world = new Float32Array(33 * 3);
+    MOVENET_TO_MP.forEach((m, k) => {
+      pose[m * 4] = p[k * 3 + 1]; pose[m * 4 + 1] = p[k * 3]; pose[m * 4 + 3] = p[k * 3 + 2];
+      world[m * 3] = p[k * 3 + 1] * W / 1000; world[m * 3 + 1] = p[k * 3] * H / 1000;
+    });
+    for (const [m, from] of Object.entries(MP_STAND_IN)) {
+      pose[m * 4] = pose[from * 4]; pose[m * 4 + 1] = pose[from * 4 + 1];
+      world[m * 3] = world[from * 3]; world[m * 3 + 1] = world[from * 3 + 1];
+    }
+    return { pose, world };
+  });
+}
+
+// 雙人追蹤：每格用 MoveNet 找出所有人，再按球衣顏色（加少少位置）分給兩名球員，身份不會對調；
+// 起點那一格量兩人球衣顏色（左邊為球員 1），兩人顏色太接近就不做雙人。被擋住不超過 0.5 秒的格用前後補上（可見度調低）。
+async function trackPeopleMoveNet(v, start, model, fps, n, dur, status) {
+  const W = v.videoWidth, H = v.videoHeight, people = Array.from({ length: n }, () => [null, null]);
+  const thumb = document.createElement('canvas'), tctx = thumb.getContext('2d', { willReadFrequently: true });
+  thumb.width = 240; thumb.height = Math.round(240 * H / W);
+  let pix = null;
+  const grabFrame = () => { tctx.drawImage(v, 0, 0, thumb.width, thumb.height); pix = tctx.getImageData(0, 0, thumb.width, thumb.height).data; };
+  // 身體（肩至髖之間、向內收窄）的平均顏色
+  const torso = pose => {
+    const xs = [11, 12, 23, 24].map(j => pose[j * 4]), ys = [11, 12, 23, 24].map(j => pose[j * 4 + 1]);
+    let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const sx = (x1 - x0) * 0.25, sy = (y1 - y0) * 0.2;
+    x0 = Math.floor((x0 + sx) * thumb.width); x1 = Math.ceil((x1 - sx) * thumb.width);
+    y0 = Math.floor((y0 + sy) * thumb.height); y1 = Math.ceil((y1 - sy) * thumb.height);
+    let r = 0, g = 0, b = 0, c = 0;
+    for (let y = Math.max(0, y0); y <= Math.min(thumb.height - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(thumb.width - 1, x1); x++) {
+      const q = (y * thumb.width + x) * 4; r += pix[q]; g += pix[q + 1]; b += pix[q + 2]; c++;
+    }
+    return c ? [r / c, g / c, b / c] : null;
+  };
+  const cdist = (a, b) => a && b ? Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) : Infinity;
+  const posOf = pose => ({ x: (pose[23 * 4] + pose[24 * 4]) / 2, y: (pose[23 * 4 + 1] + pose[24 * 4 + 1]) / 2 });
+  const detect = () => { grabFrame(); return moveNetPeople(model, v).map(p => ({ ...p, pos: posOf(p.pose), colour: torso(p.pose) })); };
+
+  // 起點：取最接近兩個人物方框的兩人
+  await seekTo(v, start.t);
+  const startCands = detect();
+  const boxes = start.boxes.map(b => ({ x: (b.originX + b.width / 2) / W, y: (b.originY + b.height / 2) / H })).sort((a, b) => a.x - b.x);
+  const firstPick = boxes.map(b => startCands.slice().sort((p, q) => Math.hypot(p.pos.x - b.x, p.pos.y - b.y) - Math.hypot(q.pos.x - b.x, q.pos.y - b.y))[0]);
+  if (!firstPick[0] || !firstPick[1] || firstPick[0] === firstPick[1] || cdist(firstPick[0].colour, firstPick[1].colour) < 30) return null;
+  const colour = firstPick.map(p => [...p.colour]), last = firstPick.map(p => p.pos);
+
+  for (let i = 0; i < n; i++) {
+    await seekTo(v, Math.min(i / fps, Math.max(dur - 0.01, 0)));
+    const cands = detect();
+    // 按顏色配對（相差太遠不收），位置只作輔助；兩人不可取同一個人
+    const pairs = [];
+    cands.forEach((c, q) => [0, 1].forEach(k => {
+      const cd = cdist(c.colour, colour[k]);
+      if (cd < 70) pairs.push([cd + Math.hypot(c.pos.x - last[k].x, c.pos.y - last[k].y) * 100, q, k]);
+    }));
+    pairs.sort((a, b) => a[0] - b[0]);
+    const usedC = new Set(), usedK = new Set();
+    for (const [, q, k] of pairs) {
+      if (usedC.has(q) || usedK.has(k)) continue;
+      usedC.add(q); usedK.add(k);
+      people[i][k] = { pose: cands[q].pose, world: cands[q].world };
+      last[k] = cands[q].pos;
+      colour[k] = colour[k].map((c0, z) => c0 * 0.9 + cands[q].colour[z] * 0.1);   // 顏色慢慢跟光線變化
+    }
+    if (i % 5 === 0) status(`追蹤兩名球員 ${i + 1} / ${n} 格…`);
+  }
+
+  // 被擋住的短時間：前後兩次看到之間線性補上，可見度設為 0.4（低於計算門檻，只用於火柴人）
+  const maxGap = Math.round(fps * FILL_MAX);
+  for (const k of [0, 1]) {
+    for (let i = 0; i < n; i++) {
+      if (people[i][k] || !people[i - 1]?.[k]) continue;
+      let j = i;
+      while (j < n && !people[j][k]) j++;
+      if (j < n && j - i <= maxGap) {
+        const a = people[i - 1][k], b = people[j][k];
+        for (let q = i; q < j; q++) {
+          const t = (q - i + 1) / (j - i + 1), pose = a.pose.map((v0, z) => v0 + (b.pose[z] - v0) * t), world = a.world.map((v0, z) => v0 + (b.world[z] - v0) * t);
+          for (let m = 0; m < 33; m++) pose[m * 4 + 3] = Math.min(0.4, a.pose[m * 4 + 3], b.pose[m * 4 + 3]);
+          people[q][k] = { pose, world, filled: true };
+        }
+      }
+      i = j;
+    }
+  }
+  return people;
+}
+
 async function analyzeClip(clip, blob, status) {
-  const { holistic, ball } = await loadModels(status);
+  const { holistic, ball, people: counter } = await loadModels(status);
   // 另開一個隱藏的 video 逐格跳轉，不影響畫面上的播放器
   const v = Object.assign(document.createElement('video'), { muted: true, playsInline: true, preload: 'auto' });
   v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
@@ -554,13 +706,16 @@ async function analyzeClip(clip, blob, status) {
     const dur = v.duration, fps = Math.min(ANALYZE_FPS, MAX_FRAMES / dur), n = Math.floor(dur * fps) + 1;
     const W = v.videoWidth, H = v.videoHeight, base = mpClock + 1000, frames = [];
     const crop = document.createElement('canvas'), cctx2 = crop.getContext('2d');
+    status('檢查畫面中有幾名球員…');
+    const start = await findTwoPeople(v, counter, dur);
+    const tracked = start && await trackPeopleMoveNet(v, start, await loadMoveNet(status), fps, n, dur, status), nPeople = tracked ? 2 : 1;
     let box = null;
     for (let i = 0; i < n; i++) {
       const t = Math.min(i / fps, Math.max(dur - 0.01, 0));
       if (Math.abs(v.currentTime - t) > 1e-4) await new Promise(r => { v.onseeked = r; v.currentTime = t; });
       const ts = Math.round(base + t * 1000) + i;
-      const h = holistic.detectForVideo(v, ts);
-      box = playerCrop(flat(h.poseLandmarks[0], 4), W, H, box);
+      const people = tracked ? tracked[i] : null, h = tracked ? null : holistic.detectForVideo(v, ts);
+      box = playerCrop(people ? people.map(p => p?.pose) : flat(h.poseLandmarks[0], 4), W, H, box);
       crop.width = crop.height = Math.round(box.s);
       cctx2.drawImage(v, box.x, box.y, box.s, box.s, 0, 0, crop.width, crop.height);
       const k = box.s / crop.width;
@@ -569,12 +724,12 @@ async function analyzeClip(clip, blob, status) {
         return [(box.x + (b.originX + b.width / 2) * k) / W, (box.y + (b.originY + b.height / 2) * k) / H,
           Math.max(b.width, b.height) * k / 2 / W, d.categories[0].score];
       });
-      frames.push(packFrame(t, h, balls));
+      frames.push(people ? { t, balls, people, pose: null, world: null, lh: null, rh: null, face: null } : packFrame(t, h, balls));
       if (i % 3 === 0 || i === n - 1) status(`分析中 ${i + 1} / ${n} 格…`);
     }
     mpClock = Math.round(base + dur * 1000) + n + 1;
     const ballTrack = await refineBall(v, frames, W, H, fps, status);
-    return { id: clip.id, version: ANALYSIS_VERSION, fps, w: W, h: H, created: Date.now(), frames, ballTrack };
+    return { id: clip.id, version: ANALYSIS_VERSION, fps, w: W, h: H, created: Date.now(), frames, ballTrack, people: nPeople };
   } finally {
     v.remove();
     URL.revokeObjectURL(url);
@@ -635,7 +790,7 @@ async function refineBall(v, frames, W, H, fps, status) {
       if (!ballColour(now)) break;   // 比對到的地方不是籃球的顏色（例如背景、衣服），停止
       // 位置定住不動、但球員的手已經移開：鎖住了背景，停止
       hist.push([nx, ny]);
-      const wrist = frames[i].pose && Math.min(...[15, 16].map(j => Math.hypot(nx - frames[i].pose[j * 4] * W, ny - frames[i].pose[j * 4 + 1] * H)));
+      const ps = posesOf(frames[i]), wrist = ps.length ? Math.min(...ps.flatMap(p => [15, 16].map(j => Math.hypot(nx - p[j * 4] * W, ny - p[j * 4 + 1] * H)))) : null;
       if (hist.length >= 5 && Math.hypot(nx - hist.at(-5)[0], ny - hist.at(-5)[1]) < r * 0.4 && wrist > r * 4) break;
       vx = (vx + nx - x) / 2; vy = (vy + ny - y) / 2; x = nx; y = ny;
       if (!found[i] || found[i].score < score) found[i] = { b: [x, y, r], score };
@@ -728,15 +883,18 @@ function metricsOf(f, A) {
 
 // 以肩寬（像素）為單位量距離，球員遠近不同也可比較
 // 側面拍攝時兩邊肩膀重疊、肩寬很細，所以取肩寬與 0.6 倍軀幹長度中較大者
+// 一格中所有球員的身體點（單人模式只有一個）
+const posesOf = f => f.people ? f.people.filter(Boolean).map(p => p.pose) : f.pose ? [f.pose] : [];
 const shoulderPx = (A, f) => {
-  const p = f.pose;
+  const p = posesOf(f)[0];
   if (!p) return 50;
   const at = i => [p[i * 4] * A.w, p[i * 4 + 1] * A.h], mid = (a, b) => at(a).map((v, k) => (v + at(b)[k]) / 2);
   return Math.max(Math.hypot(...sub(at(11), at(12))), Math.hypot(...sub(mid(11, 12), mid(23, 24))) * 0.6) || 50;
 };
-const handDist = (A, f, c) => f.pose
-  ? Math.min(...[15, 16].map(j => Math.hypot((c[0] - f.pose[j * 4]) * A.w, (c[1] - f.pose[j * 4 + 1]) * A.h))) / shoulderPx(A, f)
-  : Infinity;
+const handDist = (A, f, c) => {
+  const ps = posesOf(f);
+  return ps.length ? Math.min(...ps.flatMap(p => [15, 16].map(j => Math.hypot((c[0] - p[j * 4]) * A.w, (c[1] - p[j * 4 + 1]) * A.h)))) / shoulderPx(A, f) : Infinity;
+};
 
 // 籃球追蹤：先去掉長時間停在同一位置、又遠離雙手的物件（例如牆上的裝飾），再逐格揀最接近上一格球位（或手）的候選
 function trackBall(A) {
@@ -798,6 +956,7 @@ function findActions(A) {
   };
   const lower = (a, b) => a < b, higher = (a, b) => a > b;
   const overlaps = (from, to) => segs.some(s => s.from <= to && s.to >= from);
+  if (A.role === 'defender') return findDefense(A, knee);   // 雙人模式的防守者只找防守動作
 
   // ---- 跳起：跳投或上籃 ----
   const ank = F.map(f => { const a = y(f, 27), b = y(f, 28); return a != null && b != null ? (a + b) / 2 : null; });
@@ -878,8 +1037,40 @@ function findActions(A) {
     i = j - 1;
   }
 
+  // ---- 運球（看得到球時）：球每次落到最低點（低過膝蓋）就是一下拍球；連續三下或以上、每下相隔 ≤ 1.2 秒為一段運球。
+  // 換手（Crossover）：連續兩下落在身體不同的一邊（以臀部中間為界）。看不到球時改用下面以手判斷的方法。
+  const kneeY = i => { const a = y(F[i], 25), b = y(F[i], 26); return a != null && b != null ? (a + b) / 2 : null; };
+  const hipMidX = i => { const a = x(F[i], 23), b = x(F[i], 24); return a != null && b != null ? (a + b) / 2 : null; };
+  const by = A.track.map(b => b?.[1] ?? null);
+  const bounces = [];
+  for (let i = 1; i < n - 1; i++) {
+    if (by[i] == null || kneeY(i) == null || by[i] < kneeY(i)) continue;
+    const win2 = Math.round(fps * 0.12);
+    let lowest = true;
+    for (let j = Math.max(0, i - win2); j <= Math.min(n - 1, i + win2); j++) if (j !== i && by[j] != null && by[j] > by[i]) lowest = false;
+    if (lowest && (!bounces.length || i - bounces.at(-1) >= fps * 0.25)) bounces.push(i);
+  }
+  let bRun = [];
+  const flushBall = () => {
+    if (bRun.length >= 3) {
+      const from = bRun[0], to = bRun.at(-1);
+      const side = i => { const h = hipMidX(i); return h == null ? 0 : Math.sign(A.track[i][0] - h); };
+      const switches = bRun.slice(1).filter((d, q) => side(d) && side(bRun[q]) && side(d) !== side(bRun[q]));
+      let low = from;
+      for (let i = from; i <= to; i++) if ((knee(i) ?? 999) < (knee(low) ?? 999)) low = i;
+      if (!overlaps(from, to)) segs.push({ type: '運球', from, to, downs: bRun.slice(), switches: switches.length,
+        events: [{ label: '開始運球', i: from }, { label: '最低一下', i: low }, ...switches.map(i => ({ label: '換手', i })), { label: '結束運球', i: to }]
+          .sort((a, b) => a.i - b.i).filter((e, q, arr) => !q || e.i !== arr[q - 1].i || e.label === '換手') });
+    }
+    bRun = [];
+  };
+  for (const b of bounces) { if (bRun.length && (b - bRun.at(-1)) / fps > 1.2) flushBall(); bRun.push(b); }
+  flushBall();
+
   // ---- 運球：較低那隻手有節奏地上下（每下 0.25–1 秒，手壓到臀部以下），最少三下 ----
-  const low = fillSmooth(F.map((f, i) => { const a = y(f, 15), b = y(f, 16), h = height(i); return a != null && b != null && h ? Math.max(a, b) / h : null; }), 1.5) ?? [];
+  // 較低那隻手的高度（以身高為單位）；只看到一隻手也算，該格量不到身高就用全片中位數
+  const hs = F.map((_, i) => height(i)).filter(v => v != null).sort((a, b) => a - b), hMed = hs[hs.length >> 1];
+  const low = fillSmooth(F.map((f, i) => { const w = [y(f, 15), y(f, 16)].filter(v => v != null), h = height(i) ?? hMed; return w.length && h ? Math.max(...w) / h : null; }), 1.5) ?? [];
   const downs = [];   // 手在最低的格
   for (let i = 1, d = 1, c = 0; i < low.length; i++) {
     if (d > 0) { if (low[i] > low[c]) c = i; else if (low[c] - low[i] > 0.05) { downs.push(c); d = -1; c = i; } }
@@ -894,22 +1085,54 @@ function findActions(A) {
       const k = []; let armUp = false;
       for (let i = from; i <= to; i++) { const v = knee(i); if (v != null) k.push(v); armUp ||= [15, 16].some(w => y(F[i], w) != null && y(F[i], 11) != null && y(F[i], w) < y(F[i], 11)); }
       const crouched = k.length && k.sort((a, b) => a - b)[k.length >> 1] <= 155;
-      if (crouched && !armUp && !overlaps(from, to)) segs.push({ type: '運球', from, to, downs: run.slice(),
-        events: [{ label: '開始運球', i: from }, { label: '最低一下', i: run.reduce((a, b) => low[b] > low[a] ? b : a) }, { label: '結束運球', i: to }] });
+      // 換手（Crossover）：連續兩下由不同的手運球（較低那隻手換了邊）
+      const hand = i => (y(F[i], 15) ?? 0) > (y(F[i], 16) ?? 0) ? 0 : 1;
+      const switches = run.slice(1).filter((d, q) => hand(d) !== hand(run[q]));
+      if (crouched && !armUp && !overlaps(from, to)) segs.push({ type: '運球', from, to, downs: run.slice(), switches: switches.length,
+        events: [{ label: '開始運球', i: from }, { label: '最低一下', i: run.reduce((a, b) => low[b] > low[a] ? b : a) },
+          ...switches.map(i => ({ label: '換手', i })), { label: '結束運球', i: to }].sort((a, b) => a.i - b.i) });
     }
     run = [];
   };
   for (const d of downs) {
     const gap = run.length ? (d - run.at(-1)) / fps : 0;
-    if (!belowHip(d) || (run.length && (gap < 0.25 || gap > 1))) flush();
+    // 雙人模式（斜角 2D）手的起落較慢較細，每下最多 1.6 秒
+    if (!belowHip(d) || (run.length && (gap < 0.25 || gap > (A.twoD ? 1.6 : 1)))) flush();
     if (belowHip(d)) run.push(d);
   }
   flush();
   return segs.sort((a, b) => a.from - b.from);
 }
 
+// 防守（雙人模式的防守者）：貼近持球者（兩人臀部距離 ≤ 1.5 倍身高）的時間，中間斷開不多於 0.3 秒、持續至少 1 秒。
+// 只用距離界定「正在防守」，站姿好不好（屈膝、站距、距離）留給判斷。
+function findDefense(A, knee) {
+  const n = A.frames.length, gapMax = Math.round(A.fps * 0.3), segs = [];
+  const guarding = i => {
+    const a = A.frames[i].pose, b = A.peer?.frames[i].pose;
+    if (!a || !b) return false;
+    const h = (Math.max(a[27 * 4 + 1], a[28 * 4 + 1]) - a[1]) * A.h || 1;
+    return Math.hypot((a[23 * 4] + a[24 * 4] - b[23 * 4] - b[24 * 4]) / 2 * A.w, (a[23 * 4 + 1] + a[24 * 4 + 1] - b[23 * 4 + 1] - b[24 * 4 + 1]) / 2 * A.h) / h <= 1.5;
+  };
+  let from = -1, last = -1;
+  const close = () => {
+    if (from >= 0 && (last - from) / A.fps >= 1) {
+      let low = from;
+      for (let i = from; i <= last; i++) if ((knee(i) ?? 999) < (knee(low) ?? 999)) low = i;
+      segs.push({ type: '防守', from, to: last, events: [{ label: '開始防守', i: from }, { label: '重心最低', i: low }, { label: '結束防守', i: last }] });
+    }
+    from = -1;
+  };
+  for (let i = 0; i < n; i++) {
+    if (guarding(i)) { if (from < 0) from = i; last = i; }
+    else if (from >= 0 && i - last > gapMax) close();
+  }
+  close();
+  return segs;
+}
+
 // ---- 顯示 ----
-let analysis = null, analyzing = false;
+let analysis = null, analyzing = false, dual = null;   // dual：雙人分析（analysis 是目前選中的那名球員）
 const ANA_HINT = $('ana-status').textContent;
 const layers = { pose: true, hands: true, face: true, ball: true };
 $('ana-layers').append(...Object.entries({ pose: '身體', hands: '手部', face: '臉部', ball: '籃球' }).map(([k, name]) =>
@@ -917,6 +1140,8 @@ $('ana-layers').append(...Object.entries({ pose: '身體', hands: '手部', face
 $('ana-legend').textContent = '實線：膝蓋角度　虛線：手肘角度　橙色：右　藍色：左。點擊圖表可跳到該時間。';
 
 function showAnalysis(A) {
+  dual = A?.people === 2 ? prepareDual(A) : null;
+  if (dual) A = dual.persons[dual.pick];
   analysis = A;
   $('ana-out').hidden = !A; $('ana-run').hidden = !!A; $('ana-clear').hidden = !A || !!current?.sample;
   if (!A) { $('ana-status').textContent = ANA_HINT; updateRight(); renderBreakdown(); drawOverlay(); return; }
@@ -926,7 +1151,9 @@ function showAnalysis(A) {
   const pct = key => Math.round(100 * (key === 'ball' ? A.track : A.frames.map(f => f[key])).filter(Boolean).length / A.frames.length);
   const body = pct('pose');
   const partial = A.frames.at(-1).t < (current?.duration ?? 0) - 0.5 ? `（只分析頭 ${fmt(A.frames.at(-1).t)} 秒）` : '';
-  $('ana-status').textContent = `已分析 ${A.frames.length} 格${partial}（每秒 ${Math.round(A.fps)} 格）。辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、籃球 ${pct('ball')}%（連推斷 ${Math.round(100 * A.ball.filter(Boolean).length / A.frames.length)}%）。`
+  $('ana-status').textContent = `已分析 ${A.frames.length} 格${partial}（每秒 ${Math.round(A.fps)} 格）。` + (dual
+    ? `雙人模式：球員 ${dual.handler + 1} 持球、球員 ${2 - dual.handler} 防守，以下是球員 ${dual.pick + 1}。辨識到身體的畫面 ${body}%、`
+    : `辨識到身體的畫面 ${body}%、左手 ${pct('lh')}%、右手 ${pct('rh')}%、臉部 ${pct('face')}%、`) + `籃球 ${pct('ball')}%（連推斷 ${Math.round(100 * A.ball.filter(Boolean).length / A.frames.length)}%）。`
     + (A.view.side ? `側面拍攝，球員向${A.view.facing > 0 ? '右' : '左'}。` : '這段影片不是側面拍攝，與側面的示範只能粗略對照；建議從側面重拍。')
     + (body < 50 ? '大部分畫面未能辨識身體，請全身入鏡、光線充足後重拍。' : '')
     + ((A.version ?? 1) < ANALYSIS_VERSION ? '這是舊版分析，清除後重新分析可得到更準確的結果。' : '');
@@ -999,6 +1226,10 @@ function drawOverlay() {
     for (const [color, conn] of POSE_GROUPS) lines(f.pose, 4, conn, color, 3, ok);
     joints(f.pose, 4, C_MID, 3, ok);
   }
+  if (layers.pose && dual) {   // 雙人：另一名球員用白色細線
+    const o = dual.persons[1 - dual.pick].frames[i].pose;
+    if (o) lines(o, 4, POSE_CONN, 'rgba(255,255,255,.7)', 2, j => j > 10 && o[j * 4 + 3] >= MIN_VIS);
+  }
   if (layers.hands) for (const [hand, color] of [[f.lh, C_LEFT], [f.rh, C_RIGHT]]) {
     if (!hand) continue;
     lines(hand, 3, HAND_CONN, color, 1.5);
@@ -1011,7 +1242,7 @@ function drawOverlay() {
     trail.forEach((g, n) => octx[n ? 'lineTo' : 'moveTo'](...xy(g, 0, 4)));
     octx.stroke();
     // 目前位置：看到的畫實線圈，推斷的畫虛線圈
-    const cur = analysis.ball?.[i];
+    const cur = (dual ? dual.persons[dual.handler] : analysis).ball?.[i];
     if (cur) { octx.lineWidth = 2.5; octx.setLineDash(cur[3] === BALL_SEEN ? [] : [4, 3]); octx.beginPath(); octx.arc(...xy(cur, 0, 4), cur[2] * cw, 0, 7); octx.stroke(); octx.setLineDash([]); }
   }
   octx.shadowBlur = 0;
@@ -1088,7 +1319,8 @@ const METRICS = {
   蓄力最低: [KNEE, ['髖部角度', m => bothSides(m, 'hip')], LEAN], 起跳: [['腳踝角度', m => bothSides(m, 'ankle')]],
   出手: [ARM('出手手肘'), ['出手肩部', (m, s) => m.side[s].shoulder], LEAN], 最高點: [ARM('出手手肘'), KNEE],
   落地: [['站距 ÷ 肩寬', m => m.stance, true]], 收球: [KNEE, LEAN],
-  開始轉身: [KNEE], 轉身一半: [KNEE, LEAN], 完成轉身: [KNEE], 開始運球: [KNEE, LEAN], 最低一下: [KNEE]
+  開始轉身: [KNEE], 轉身一半: [KNEE, LEAN], 完成轉身: [KNEE], 開始運球: [KNEE, LEAN], 最低一下: [KNEE], 換手: [KNEE],
+  開始防守: [KNEE], 重心最低: [KNEE]   // 站距在判斷中按穩定的方法計（2D 側身時肩寬不準），不在表中重複
 };
 const TIPS = {
   跳投: {
@@ -1101,7 +1333,8 @@ const TIPS = {
     出手: '在最高點伸直手臂，用手腕輕托把球放到籃板方框。', 落地: '雙腳落地、屈膝緩衝，保持平衡。'
   },
   轉身: { 開始轉身: '以支撐腳為軸心，先降低重心再轉。', 轉身一半: '轉身時把球貼近身體，用身體護球。', 完成轉身: '轉身後立即抬頭，看清楚籃框和防守者。' },
-  運球: { 開始運球: '屈膝、抬頭，用手指和指腹控球。', 最低一下: '把球壓低，反彈高度不高於腰部。', 結束運球: '收球時雙手接穩，準備下一個動作。' }
+  運球: { 開始運球: '屈膝、抬頭，用手指和指腹控球。', 最低一下: '把球壓低，反彈高度不高於腰部。', 換手: '換手時把球壓低，快速由一邊拍到另一邊，肩膀同時做假動作。', 結束運球: '收球時雙手接穩，準備下一個動作。' },
+  防守: { 開始防守: '雙腳比肩寬、屈膝、臀部向後坐，雙手張開。', 重心最低: '保持低重心，用滑步跟上，雙腳不交叉。', 結束防守: '與持球者保持約一臂距離，留意對手的腰部而不是球。' }
 };
 
 // 每段動作的資料（用於判斷）
@@ -1126,7 +1359,26 @@ function segFacts(A, s) {
     if (kn.length) f.load = Math.min(...kn);
   }
   if (s.type === '轉身') { const k = knees(s.from, s.to); if (k.length) f.low = Math.min(...k); f.turn = s.turn; }
+  if (s.type === '防守') {
+    const k = knees(s.from, s.to); if (k.length) f.low = Math.min(...k);
+    f.twoD = !!A.twoD;
+    // 站距：3D 用兩腳距離 ÷ 肩寬；2D（雙人模式）側身時肩膀重疊、肩寬量不準，改用兩腳距離 ÷ 身高再換算（肩寬約 0.25 倍身高）
+    const st = (A.twoD
+      ? A.frames.slice(s.from, s.to + 1).map(fr => { const p = fr.pose; if (!p || p[27 * 4 + 3] < MIN_VIS || p[28 * 4 + 3] < MIN_VIS) return null; const h = Math.max(p[27 * 4 + 1], p[28 * 4 + 1]) - p[1]; return h > 0 ? Math.hypot((p[27 * 4] - p[28 * 4]) * A.w, (p[27 * 4 + 1] - p[28 * 4 + 1]) * A.h) / (h * A.h) / 0.25 : null; })
+      : A.metrics.slice(s.from, s.to + 1).map(m => m?.stance)).filter(v => v != null).sort((a, b) => a - b);
+    if (st.length) f.stanceMed = st[st.length >> 1];
+    // 與持球者的距離：兩人臀部之間，以身高（鼻至腳踝）為單位
+    const d = [];
+    for (let i = s.from; i <= s.to; i++) {
+      const a = A.frames[i].pose, b = A.peer?.frames[i].pose;
+      if (!a || !b) continue;
+      const h = (Math.max(a[27 * 4 + 1], a[28 * 4 + 1]) - a[1]) * A.h || 1;
+      d.push(Math.hypot((a[23 * 4] + a[24 * 4] - b[23 * 4] - b[24 * 4]) / 2 * A.w, (a[23 * 4 + 1] + a[24 * 4 + 1] - b[23 * 4 + 1] - b[24 * 4 + 1]) / 2 * A.h) / h);
+    }
+    if (d.length) f.gap = d.sort((x, y) => x - y)[d.length >> 1];
+  }
   if (s.type === '運球') {
+    f.twoD = !!A.twoD;
     const k = knees(s.from, s.to); if (k.length) f.knee = k.sort((a, b) => a - b)[k.length >> 1];
     f.count = s.downs.length; f.rate = (s.downs.length - 1) / ((s.to - s.from) / A.fps || 1);
     // 最低一下時手的高度：到大腿中段以下為低（臀部與膝蓋的中間）
@@ -1136,7 +1388,15 @@ function segFacts(A, s) {
   return f;
 }
 
+const DEFENCE_CHECKS = {
+  開始防守: ({ stanceMed }) => [stanceMed == null ? null : stanceMed >= 1.3 ? good(`雙腳約肩寬的 ${stanceMed.toFixed(1)} 倍，容易橫移。`)
+    : bad(`雙腳只有肩寬的 ${stanceMed.toFixed(1)} 倍，太窄，橫移和急停都會慢。`)],
+  重心最低: ({ low, twoD }) => [low == null ? null : low <= (twoD ? 140 : 130) ? good(`防守時屈膝到 ${deg(low)}，重心夠低。`) : bad(`防守時膝蓋只屈到 ${deg(low)}，重心太高，容易被突破。`)],
+  結束防守: ({ gap }) => [gap == null ? null : gap > 1 ? bad(`與持球者相距約 ${gap.toFixed(1)} 倍身高，太遠，對手容易出手或加速。`)
+    : gap < 0.3 ? bad(`與持球者貼得太近（約 ${gap.toFixed(1)} 倍身高），容易被突破。`) : good(`與持球者保持約一臂距離（約 ${gap.toFixed(1)} 倍身高）。`)]
+};
 const CHECKS = {
+  防守: DEFENCE_CHECKS,
   跳投: {
     蓄力最低: ({ knee, lean }) => [
       knee == null ? null : knee < 80 ? bad(`膝蓋屈到 ${deg(knee)}，蹲得太深，出手會變慢。`)
@@ -1175,6 +1435,10 @@ const CHECKS = {
   運球: {
     開始運球: ({ knee }) => [knee == null ? null : knee <= 150 ? good(`運球時屈膝（${deg(knee)}），重心低。`) : bad(`運球時站得太直（膝蓋 ${deg(knee)}），容易被搶斷。`)],
     最低一下: ({ handLow }) => [handLow == null ? null : handLow ? good('運球時手壓到大腿中段以下，球的高度低。') : bad('運球偏高（手只到腰間），容易被抄截。')],
+    換手: ({ knee, handLowNow, twoD }) => [
+      knee == null ? null : knee <= (twoD ? 150 : 140) ? good(`換手時屈膝（${deg(knee)}），重心低，變向快。`) : bad(`換手時站得太高（膝蓋 ${deg(knee)}），變向會慢。`),
+      handLowNow == null ? null : handLowNow ? good('換手時球壓得低（手到大腿中段以下），不易被抄截。') : bad('換手時球太高，容易被防守者抄截。')
+    ],
     結束運球: ({ count, rate }) => [count == null ? null : rate >= 1.5 ? good(`連續運球 ${count} 下，每秒約 ${rate.toFixed(1)} 下，節奏流暢。`) : bad(`連續運球 ${count} 下，每秒只有約 ${rate.toFixed(1)} 下，節奏較慢。`)]
   }
 };
@@ -1197,7 +1461,9 @@ function elbowAt(A, i, side) {
 function assess(A, e) {
   const m = A.metrics[e.i], s = A.segments[e.seg];
   if (!m) return [];
-  const ctx = { knee: bothSides(m, 'knee'), elbow: elbowAt(A, e.i, handSide(A, e)), lean: m.lean, stance: m.stance, ...segFacts(A, s) };
+  const p = A.frames[e.i].pose;   // 這一格手是否壓到大腿中段以下（運球、換手用）
+  const handLowNow = p ? Math.max(p[15 * 4 + 1], p[16 * 4 + 1]) > ((p[23 * 4 + 1] + p[24 * 4 + 1]) / 2 + (p[25 * 4 + 1] + p[26 * 4 + 1]) / 2) / 2 : null;
+  const ctx = { twoD: !!A.twoD, handLowNow, knee: bothSides(m, 'knee'), elbow: elbowAt(A, e.i, handSide(A, e)), lean: m.lean, stance: m.stance, ...segFacts(A, s) };
   return (CHECKS[s.type][phaseKey(e.label)]?.(ctx) ?? []).filter(Boolean);
 }
 // 投籃手：第一次跳投最高點時較高的手腕
@@ -1207,13 +1473,45 @@ function shootingSide(A) {
   return p && p[16 * 4 + 1] < p[15 * 4 + 1] ? 1 : 0;
 }
 // 補上由原始關節座標推算的資料
+// ---- 雙人：每名球員一份分析 ----
+// MoveNet 的關節分數普遍較低（官方以 0.3 為門檻），換算成與 MediaPipe 可見度相同的尺度：0.3 → 0.5；補上的格保持 0.4 以下
+const moveNetVis = p => { if (!p || p.filled) return p?.pose; const q = p.pose.slice(); for (let m = 0; m < 33; m++) q[m * 4 + 3] = Math.min(1, q[m * 4 + 3] / 0.6); return q; };
+function personAnalysis(A, k) {
+  return { id: A.id, version: A.version, fps: A.fps, w: A.w, h: A.h, ballTrack: A.ballTrack, person: k, twoD: true,
+    frames: A.frames.map(f => ({ t: f.t, balls: f.balls, people: f.people, pose: moveNetVis(f.people?.[k]) ?? null, world: f.people?.[k]?.world ?? null, lh: null, rh: null, face: null })) };
+}
+// 持球者：看到籃球的格中，球較常在其手邊（0.12 倍畫面高度內）的一位
+function ballHandler(A) {
+  const near = [0, 0];
+  A.frames.forEach((f, i) => {
+    const b = A.ballTrack?.[i];
+    if (b) f.people?.forEach((p, k) => {
+      if (p && Math.min(...[15, 16].map(j => Math.hypot((b[0] - p.pose[j * 4]) * A.w, (b[1] - p.pose[j * 4 + 1]) * A.h))) < A.h * 0.12) near[k]++;
+    });
+  });
+  return near[1] > near[0] ? 1 : 0;
+}
+function prepareDual(A) {
+  if (A.persons) return A;
+  A.handler = ballHandler(A);
+  A.persons = [0, 1].map(k => Object.assign(personAnalysis(A, k), { role: k === A.handler ? 'handler' : 'defender' }));
+  A.persons.forEach((p, k) => { p.peer = A.persons[1 - k]; prepare(p); });
+  // 火柴人：兩人共用比例和置中位置（兩人中點），保留兩人之間的距離
+  const tfs = A.persons.map(p => p.mimic?.tf);
+  if (tfs.every(Boolean)) {
+    const shared = { scale: tfs[0].scale.map((v, i) => (v + tfs[1].scale[i]) / 2), cx: tfs[0].cx.map((v, i) => (v + tfs[1].cx[i]) / 2) };
+    A.persons.forEach(p => { p.mimic = buildMimic(p, shared); });
+  }
+  A.pick ??= A.handler;
+  return A;
+}
 function prepare(A) {
   A.metrics ??= A.frames.map(f => metricsOf(f, A));
   A.track ??= cleanTrack(A, A.ballTrack ?? trackBall(A));
   A.segments ??= findActions(A);
   A.events ??= A.segments.flatMap((s, k) => s.events.map(e => ({ ...e, seg: k })));
   A.view ??= cameraView(A);
-  A.ball ??= inferBall(A);
+  A.ball ??= A.role === 'defender' ? A.frames.map(() => null) : inferBall(A);   // 球只跟持球者
   A.mimic ??= buildMimic(A);
   A.side ??= shootingSide(A);
   A.checks ??= A.events.map(e => assess(A, e));
@@ -1223,9 +1521,13 @@ const checkList = items => el('ul', { className: 'checks' }, items.map(c => el('
 const eventName = (A, e) => `${A.segments[e.seg].type}・${e.label}`;
 
 async function renderBreakdown() {
-  const A = analysis, box = $('breakdown'), note = text => box.replaceChildren(el('p', { className: 'empty', textContent: text }));
+  // 雙人時先選看哪一名球員
+  const players = dual ? [el('div', { className: 'row', style: 'margin:6px 0' }, dual.persons.map((p, k) => el('button', {
+    className: k === dual.pick ? 'on' : '', textContent: `球員 ${k + 1}・${k === dual.handler ? '持球' : '防守'}`, onclick: () => { dual.pick = k; showAnalysis(dual); }
+  })))] : [];
+  const A = analysis, box = $('breakdown'), note = text => box.replaceChildren(...players, el('p', { className: 'empty', textContent: text }));
   if (!A?.mimic) return note(analyzing ? '分析中，完成後會把影片中的動作逐一拆解。' : '分析影片後，這裡會把影片中的動作逐一拆解。');
-  if (!A.segments.length) return note('影片中未找到可辨識的動作（跳投、上籃、轉身、運球）。');
+  if (!A.segments.length) return note(A.role === 'defender' ? '未找到持續的防守站姿。' : '影片中未找到可辨識的動作（跳投、上籃、轉身、運球）。');
   const refData = current.sample ? null : await sampleAnalysis();
   if (A !== analysis) return;   // 等待期間已換了影片
   const ref = refData && prepare(refData);
@@ -1245,8 +1547,8 @@ async function renderBreakdown() {
     bads.length ? el('div', {}, [el('b', { textContent: '最值得改善' }), checkList(bads.slice(0, 3))])
       : el('p', { className: 'hint', textContent: all.length ? '各項都在參考範圍內。' : '這一段未有足夠數值可判斷。' })
   ]);
-  box.replaceChildren(
-    el('p', { className: 'hint', textContent: `影片中找到：${Object.entries(count).map(([t, c]) => `${t} ${c} ${t === '運球' ? '段' : '次'}`).join('、')}。` }),
+  box.replaceChildren(...players,
+    el('p', { className: 'hint', textContent: `影片中找到：${Object.entries(count).map(([t, c]) => `${t} ${c} ${['運球', '防守'].includes(t) ? '段' : '次'}`).join('、')}。` }),
     picker, summary,
     ...segEvents.map(e => {
       const key = phaseKey(e.label), t = A.frames[e.i].t, m = A.metrics[e.i], checks = A.checks[A.events.indexOf(e)], { j, ball, inferred } = mimicAt(A.mimic, t);
@@ -1269,6 +1571,7 @@ async function renderBreakdown() {
       ]);
     }),
     el('p', { className: 'hint', textContent: '「做得好／可改善」按一般籃球教學的參考範圍判斷，角度由單一鏡頭估算，只供參考。'
+      + (A.twoD ? '雙人模式只有畫面 2D 角度，斜角拍攝時膝蓋會看起來較直，門檻已放寬。' : '')
       + (ref ? '示範片數值來自一名動作良好的球員，並非唯一標準。' : '上載你的影片後，數值會與示範片同類動作並列比較。') }));
 }
 
@@ -1405,7 +1708,7 @@ function fillSmooth(v, sigma) {
   });
 }
 
-function buildMimic(A) {
+function buildMimic(A, shared) {
   const F = A.frames, n = F.length;
   const px = (f, i) => f.pose && f.pose[i * 4 + 3] >= MIMIC_VIS ? [f.pose[i * 4] * A.w, f.pose[i * 4 + 1] * A.h] : null;
   // 靠近鏡頭的一邊畫深色：全片比較左右肩、髖的深度（z 越小越近），整段固定，避免閃來閃去
@@ -1443,10 +1746,12 @@ function buildMimic(A) {
   const scale = fillSmooth(bone.map(b => MIMIC_HEIGHT / (b * ref)), slow);
   const hipX = track.hN.map((p, i) => (p[0] + track.hF[i][0]) / 2);
   const cx = fillSmooth(hipX.map((_, i) => median(hipX.slice(Math.max(0, i - win), i + win + 1))), slow);
-  const toSvg = ([x, y], i) => [120 + (x - cx[i]) * scale[i], GROUND - (ground[i] - y) * scale[i]];
+  // 雙人時用共用的比例和置中位置（shared），地面仍各自計（斜角拍攝時兩人腳底高度不同）
+  const S = shared?.scale ?? scale, C = shared?.cx ?? cx;
+  const toSvg = ([x, y], i) => [120 + (x - C[i]) * S[i], GROUND - (ground[i] - y) * S[i]];
   const out = {};
   for (const [name, pts] of Object.entries(track)) out[name] = pts.map(toSvg);
-  return { pts: out, ball: ball.map((b, i) => b && toSvg(b, i)), ballSrc: A.ball.map(b => b?.[3]), n, fps: A.fps };
+  return { pts: out, ball: ball.map((b, i) => b && toSvg(b, i)), ballSrc: A.ball.map(b => b?.[3]), n, fps: A.fps, tf: { scale, cx } };
 }
 
 // 播放時間 → 關節座標：Catmull-Rom 曲線在格與格之間補間，速度連續
@@ -1478,15 +1783,24 @@ function mimicAt(M, t) {
   return { j, ball, inferred };
 }
 
+// 雙人時畫另一名球員（淡色）
+function drawOther(t) {
+  const O = dual?.persons[1 - dual.pick];
+  if (!O?.mimic || !O.frames[frameIndex(t)].pose) return hideFigure(fig2);
+  drawFigure(mimicAt(O.mimic, t).j, null, false, fig2);
+}
 function drawMimic(t) {
   const A = analysis;
+  drawOther(t);
   if (!A.frames[frameIndex(t)].pose) {   // 這一格看不到球員，不要畫補出來的猜測
     hideFigure();
     $('demo-label').textContent = '畫面中看不到球員';
     $('demo-cue').textContent = '';
     return;
   }
-  const { j, ball, inferred } = mimicAt(A.mimic, t);
+  const { j } = mimicAt(A.mimic, t);
+  // 籃球跟持球者（雙人時看的是防守者也一樣畫出球）
+  const { ball, inferred } = mimicAt((dual ? dual.persons[dual.handler] : A).mimic, t);
   drawFigure(j, ball, inferred);
   const out = t > A.frames.at(-1).t + 1 / A.fps;
   const ev = A.events.filter(e => A.frames[e.i].t <= t + 1e-3).at(-1);
@@ -1497,7 +1811,7 @@ function drawMimic(t) {
 }
 function updateRight() {
   if (analysis?.mimic) return drawMimic(video.currentTime);
-  hideFigure();
+  hideFigure(); hideFigure(fig2);
   $('demo-label').textContent = analyzing ? '分析中…' : '未有分析';
   $('demo-cue').textContent = '分析完成後，火柴人會逐格複製影片中的動作。';
 }
@@ -1507,7 +1821,7 @@ video.addEventListener('play', () => {
   requestAnimationFrame(loop);
 });
 
-$('credit').replaceChildren(el('a', { href: SAMPLE.creditUrl, textContent: SAMPLE.credit, target: '_blank', rel: 'noopener' }));
+$('credit').replaceChildren(...SAMPLES.map(x => el('div', {}, [el('a', { href: x.creditUrl, textContent: x.credit, target: '_blank', rel: 'noopener' })])));
 openLab(SAMPLE);
 </script>
 </body>
