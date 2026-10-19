@@ -1469,10 +1469,18 @@ function assess(A, e) {
   return (CHECKS[s.type][phaseKey(e.label)]?.(ctx) ?? []).filter(Boolean);
 }
 // 投籃手：第一次跳投最高點時較高的手腕
+// 投籃手：每次投籃／上籃的出手和最高點，看哪隻手腕明顯較高（差距按身高計），全片加總投票。
+// 側面拍時遠離鏡頭那隻手常被擋住、兩手高度差不多，只看一格會判錯，所以差距少於 3% 身高的不計。
 function shootingSide(A) {
-  const e = A.events.find(e => A.segments[e.seg].type === '跳投' && e.label === '最高點');
-  const p = e && A.frames[e.i].pose;
-  return p && p[16 * 4 + 1] < p[15 * 4 + 1] ? 1 : 0;
+  let vote = 0;
+  for (const e of A.events) {
+    if (!['跳投', '上籃'].includes(A.segments[e.seg].type) || !/出手|最高點/.test(e.label)) continue;
+    const p = A.frames[e.i].pose;
+    if (!p) continue;
+    const body = Math.max(Math.max(p[27 * 4 + 1], p[28 * 4 + 1]) - p[1], 0.05), d = (p[15 * 4 + 1] - p[16 * 4 + 1]) / body;
+    if (Math.abs(d) >= 0.03) vote += d;
+  }
+  return vote > 0 ? 1 : 0;
 }
 // 補上由原始關節座標推算的資料
 // ---- 雙人：每名球員一份分析 ----
@@ -1515,8 +1523,8 @@ function prepare(A) {
   A.view ??= cameraView(A);
   A.ball ??= A.role === 'defender' ? A.frames.map(() => null) : inferBall(A);   // 球只跟持球者
   A.mimic ??= buildMimic(A);
-  A.pov ??= buildPov(A);   // 第一身視角（只有單人 3D 分析才有）
   A.side ??= shootingSide(A);
+  A.pov ??= buildPov(A);   // 第一身視角（只有單人 3D 分析才有；拿球的手要先知道投籃手）
   A.checks ??= A.events.map(e => assess(A, e));
   return A;
 }
@@ -1826,8 +1834,10 @@ function buildPov(A) {
     const near = [19, 20].map(j => Math.hypot(b[0] * A.w - img(j)[0], b[1] * A.h - img(j)[1]));
     const bodyPx = Math.max(Math.max(p[27 * 4 + 1], p[28 * 4 + 1]) - p[1], 0.05) * A.h, m = 1.6 / bodyPx;
     if (b[3] === BALL_HELD || Math.min(...near) < bodyPx * 0.15) {
+      // 拿球的手：側面拍時兩手在畫面上重疊，所以只要投籃手不比另一隻手遠太多就算投籃手拿着
+      const k = near[A.side] < near[1 - A.side] + bodyPx * 0.15 ? A.side : 1 - A.side;
       // 球心在手掌外面：沿前臂方向（手肘 → 食指）再出 0.12 米，舉到額前時球在手上方，抱在胸前時球在手前面
-      const k = near[0] <= near[1] ? 0 : 1, hnd = hands[k], dir = sub(hnd, at(i, 13 + k)), dl = Math.hypot(...dir) || 1;
+      const hnd = hands[k], dir = sub(hnd, at(i, 13 + k)), dl = Math.hypot(...dir) || 1;
       const c = hnd.map((v, q) => v + dir[q] / dl * 0.12);
       ballPts.push(c); lastZ = c[2];
     } else {
@@ -1835,7 +1845,38 @@ function buildPov(A) {
       ballPts.push(Object.assign([(b[0] * A.w - hip[0]) * m, (b[1] * A.h - hip[1]) * m, lastZ], { air: true }));
     }
   }
-  return { at, n, fps: A.fps, lift, hoop: [hx, hz], ball: ballPts, face };
+  // 與籃框距離：世界座標以臀部為原點，看不到球員在場上移動，所以上籃時模擬走近——
+  // 上籃開始前 1 秒由 4.6 米漸近，最高點／出手時到 1 米，落地後 1 秒內退回 4.6 米
+  const dist = new Array(n).fill(POV_HOOP_DIST), look = new Array(n).fill(0), ease = x => x * x * (3 - 2 * x), fps = A.fps;
+  for (const s of A.segments.filter(s => s.type === '上籃')) {
+    const peak = Math.min(...s.events.filter(e => /最高點|出手/.test(e.label)).map(e => e.i), s.to);
+    const a = Math.max(0, s.from - Math.round(fps)), z = Math.min(n - 1, s.to + Math.round(fps));
+    for (let i = a; i <= z; i++) {
+      const x = i < peak ? (i - a) / Math.max(1, peak - a) : i <= s.to ? 1 : 1 - (i - s.to) / Math.max(1, z - s.to);
+      dist[i] = Math.min(dist[i], POV_HOOP_DIST - (POV_HOOP_DIST - 1) * ease(x));
+      look[i] = Math.max(look[i], ease(x));   // 上籃時眼睛望住籃框
+    }
+  }
+  const floorAt = i => Math.max(...[27, 28, 29, 30, 31, 32].map(j => at(i, j)[1])) + lift[i];
+  // 視線：頭的方向（耳朵中間 → 雙眼中間）再向下 12°（人平時眼睛略向下望）；
+  // 球在 1.5 米內時眼睛會跟住球（接球、運球、出手前），向球的方向轉一半，所以伸出去接球的雙手看得到；最後再平滑免得鏡頭抖
+  const gaze = Array.from({ length: n }, (_, i) => {
+    const eye = mid(at(i, 2), at(i, 5)), h = sub(eye, mid(at(i, 7), at(i, 8))), hl = Math.hypot(...h) || 1;
+    let g = [h[0] / hl, h[1] / hl + Math.sin(12 * Math.PI / 180), h[2] / hl];
+    const b = ballPts[i], bl = b && Math.hypot(...sub(b, eye));
+    if (b && bl < 1.5) {
+      // 望住球入手：瞄準球與雙手中間，接球時伸出去的手和飛來的球都在畫面內
+      const d = sub(mid(b, mid(at(i, 19), at(i, 20))), eye), dl = Math.hypot(...d) || 1, w = 0.6;
+      g = g.map((v, q) => v * (1 - w) + d[q] / dl * w);
+    }
+    if (look[i]) {
+      const rim = sub([hx * dist[i], floorAt(i) - POV_RIM_H, hz * dist[i]], eye), rl = Math.hypot(...rim), w = look[i] * 0.7;
+      g = g.map((v, q) => v * (1 - w) + rim[q] / rl * w);
+    }
+    return g;
+  });
+  const gz = [0, 1, 2].map(q => fillSmooth(gaze.map(g => g[q]), 4));
+  return { at, n, fps: A.fps, lift, hoop: [hx, hz], ball: ballPts, face, dist, gaze: i => [gz[0][i], gz[1][i], gz[2][i]] };
 }
 
 function drawPov(t) {
@@ -1848,8 +1889,8 @@ function drawPov(t) {
   const norm = v => { const l = Math.hypot(...v) || 1; return v.map(x => x / l); };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  // 鏡頭：雙眼中間；方向：耳朵中間 → 雙眼中間（大致是平視的視線，包括抬頭、低頭；耳朵→鼻尖會偏向下）
-  const eye = mid(pt(2), pt(5)), f = norm(sub(eye, mid(pt(7), pt(8))));
+  // 鏡頭：雙眼中間；方向見 buildPov 的視線（頭的方向加跟球）
+  const eye = mid(pt(2), pt(5)), f = norm(lerp3(P.gaze(i), P.gaze(k)));
   const r = norm(cross(f, [0, -1, 0])), up = cross(r, f);
   const focal = W / 2 / Math.tan(POV_FOV / 2 * Math.PI / 180);
   const proj = p => { const d = sub(p, eye), z = dot(d, f); return z < 0.05 ? null : [W / 2 + focal * dot(d, r) / z, H / 2 - focal * dot(d, up) / z]; };
@@ -1867,15 +1908,16 @@ function drawPov(t) {
     poly(Array.from({ length: 33 }, (_, q) => [g, floor, -8 + q / 2]), line, 1);
     poly(Array.from({ length: 33 }, (_, q) => [-8 + q / 2, floor, g]), line, 1);
   }
-  // 虛擬籃框：在面向方向 4.6 米、高 3.05 米；籃板在籃框後面
-  const [hx, hz] = P.hoop, side = [-hz, 0, hx];
-  const rim = [hx * POV_HOOP_DIST, floor - POV_RIM_H, hz * POV_HOOP_DIST];
+  // 虛擬籃框：在面向方向（平時 4.6 米，上籃時走近）、高 3.05 米；籃板在籃框後面
+  const [hx, hz] = P.hoop, side = [-hz, 0, hx], hd = P.dist[i] + (P.dist[k] - P.dist[i]) * u;
+  const rim = [hx * hd, floor - POV_RIM_H, hz * hd];
   poly(Array.from({ length: 25 }, (_, q) => { const a = q / 24 * 2 * Math.PI; return [rim[0] + Math.cos(a) * POV_RIM_R, rim[1], rim[2] + Math.sin(a) * POV_RIM_R]; }), accent, 3);
   const bc = [rim[0] + hx * 0.38, 0, rim[2] + hz * 0.38], corner = (s, h) => [bc[0] + side[0] * s, floor - h, bc[2] + side[2] * s];
   poly([corner(-0.9, 2.9), corner(0.9, 2.9), corner(0.9, 3.95), corner(-0.9, 3.95), corner(-0.9, 2.9)], muted, 2);
   poly([[rim[0] + hx * 0.38, floor, rim[2] + hz * 0.38], corner(0, 2.9)], muted, 2);   // 籃架
   // 自己的身體：手臂（含手掌）、身體、腳
   for (const [s, e, w, ix] of [[11, 13, 15, 19], [12, 14, 16, 20]]) poly([pt(s), pt(e), pt(w), pt(ix)], text, 4);
+  for (const [w, pk, ix, th] of [[15, 17, 19, 21], [16, 18, 20, 22]]) { poly([pt(w), pt(pk), pt(ix), pt(w)], text, 6); poly([pt(w), pt(th)], text, 4); }   // 手掌、拇指
   poly([pt(11), pt(12)], text, 3); poly([pt(23), pt(24)], text, 3);
   for (const [h0, kn, an, toe] of [[23, 25, 27, 31], [24, 26, 28, 32]]) poly([pt(h0), pt(kn), pt(an), pt(toe)], muted, 3);
   // 籃球（半徑約 0.12 米）
